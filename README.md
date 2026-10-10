@@ -1,4 +1,14 @@
-# SaveDesktopDesign
+# SaveYourKDEDesign
+
+Formerly **SaveDesktopDesign**. Existing SDD1 codes, settings and rollback files
+remain compatible. The source filename `savedesktopdesign.py`, internal storage
+paths and old launcher are retained deliberately for older installations.
+The preferred launcher is now `saveyourkdedesign`.
+In-app updates also migrate the standard installed menu label on next startup;
+custom launchers and development checkouts are left alone. The old settings
+namespace remains in use, preserving language preferences and saved codes.
+The intended GitHub name is `redsoul1905/SaveYourKDEDesign`; until the repository
+rename is completed, updates fall back to `redsoul1905/Savedesktopdesign`.
 
 **Current version: 1.6.0** · [Changelog](#changelog)
 
@@ -11,10 +21,14 @@ The import preflight can offer to install a missing KDE desktop on Ubuntu,
 regular Fedora, and Arch/Arch-derived systems, after explicit confirmation and
 administrator authentication. The repository candidate for Plasma must match
 the exported upstream Plasma version. Ubuntu uses `kde-plasma-desktop` without
-recommended packages, plus the separate Wayland session when available and
+recommended packages, with the KDE administrator-authentication agent and the separate Wayland session when available and
 needed; Fedora uses `@kde-desktop-environment`; Arch uses `plasma-meta`. Existing
 desktop environments are not removed and the login manager is not explicitly
 switched. Repository metadata may need refreshing through the system updater.
+Before consent, a non-privileged package-solver preview is available under
+**Details**, including the transaction summary when provided by the manager.
+If the preview fails, installation is not offered. Arch with pending package
+updates must be fully updated first; this flow does not perform partial updates.
 
 When an existing Plasma installation needs an available matching update, the
 app recommends the system updater; it does not perform distribution upgrades,
@@ -41,8 +55,13 @@ one-click clone across arbitrary KDE releases or screen layouts.
 
 Validation: offline mocked Ubuntu/Fedora/Arch repositories and administrator
 transactions, minimum-version checks, cancellation and active-session checks.
-No real operating system packages are installed by the tests. Full Ubuntu and
-Fedora VM installation/relogin/restore verification is pending before release.
+No real operating system packages are installed by the tests. Additional real
+repository checks on 2026-10-10 resolved the installation on Ubuntu 24.04
+(`apt-get --simulate`) and Fedora 44 (`dnf --assumeno`) in disposable containers.
+The offered Plasma versions were 5.27.12 and 6.7.5 respectively. These are not
+full desktop tests: VM installation/relogin/restore verification is still
+pending before release. Fedora's empty-container plan included about 3 GiB of
+downloads; actual desktop transactions differ and must be reviewed.
 Package choices follow the [Ubuntu package catalog](https://packages.ubuntu.com/kde-plasma-desktop)
 and [Fedora KDE instructions](https://fedoraproject.org/wiki/KDE).
 
@@ -52,7 +71,7 @@ Works on **Arch-based systems (CachyOS, EndeavourOS …), Ubuntu/Debian and Fedo
 
 🌍 **Languages:** English · Deutsch · Français · Italiano · Español · Português · Türkçe — auto-detects your system language, switchable in the app.
 
-![SaveDesktopDesign screenshot](screenshot.png)
+![Previous-version screenshot (before the SaveYourKDEDesign rename)](screenshot.png)
 
 ## What gets backed up?
 
@@ -91,12 +110,12 @@ sudo dnf install git python3 python3-pyqt6
 
 Then:
 ```bash
-git clone https://github.com/redsoul1905/Savedesktopdesign.git
-cd Savedesktopdesign
+git clone https://github.com/redsoul1905/Savedesktopdesign.git SaveYourKDEDesign
+cd SaveYourKDEDesign
 ./install.sh
 ```
 
-You'll then find **SaveDesktopDesign** in your application menu.
+You'll then find **SaveYourKDEDesign** in your application menu.
 
 Run directly without installing:
 
@@ -204,7 +223,7 @@ The downloaded file is only installed if it is recognisably this application and
 Or do a completely fresh install (deletes the old folder first):
 
 ```bash
-rm -rf ~/Savedesktopdesign && git clone https://github.com/redsoul1905/Savedesktopdesign.git ~/Savedesktopdesign && cd ~/Savedesktopdesign && ./install.sh
+cd ~/SaveYourKDEDesign && ./install.sh --update
 ```
 
 ## Uninstall

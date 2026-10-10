@@ -20,6 +20,8 @@ class DesktopSetupTests(unittest.TestCase):
             if cmd[0] == "dnf":
                 return candidate + "\n"
             if cmd[0] == "pacman":
+                if cmd[1] == "-Qu":
+                    return ""
                 return "Version : " + candidate
             return "available"
         with patch.object(app.platform, "freedesktop_os_release", return_value={"ID": distro}), \
@@ -70,7 +72,7 @@ class DesktopSetupTests(unittest.TestCase):
     def test_arch_derivative_uses_arch_plan(self):
         with patch.object(app.platform, "freedesktop_os_release", return_value={"ID": "cachyos", "ID_LIKE": "arch"}), \
                 patch.object(app.shutil, "which", side_effect=lambda n: "/usr/bin/" + n), \
-                patch.object(app, "_run_cmd", return_value="Version : 6.5.0-1\n"), \
+                patch.object(app, "_run_cmd", side_effect=lambda cmd, timeout: "" if cmd[1] == "-Qu" else "Version : 6.5.0-1\n"), \
                 patch.object(Path, "exists", return_value=False):
             plan = app.desktop_setup(manifest(), {**PROFILE, "plasma": ""})
         self.assertEqual(plan["command"][0], "pacman")

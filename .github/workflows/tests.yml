@@ -24,6 +24,7 @@ jobs:
           sudo apt-get install -y libegl1 libopengl0
       - run: python -m pip install PyQt6
       - run: python -m py_compile savedesktopdesign.py
+      - run: bash -n install.sh
       - name: Run offline tests
         run: |
           python - <<'PY'
@@ -64,5 +65,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME" savedesktopdesign.py
-          --verify-tag --title "SaveDesktopDesign $GITHUB_REF_NAME"
+          --verify-tag --title "SaveYourKDEDesign $GITHUB_REF_NAME"
           --notes-file RELEASE_NOTES.md --latest

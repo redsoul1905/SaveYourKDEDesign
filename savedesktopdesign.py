@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SaveDesktopDesign — Sichert & restauriert das komplette KDE-Plasma-Design
+SaveYourKDEDesign — Sichert & restauriert das komplette KDE-Plasma-Design
 (Themes, Icons, Schriften, KWin-Skripte, Plasma-Einstellungen, Kvantum,
 Wallpaper, Panel-Layouts) sowie Paketlisten (pacman, AUR, Flatpak).
 
@@ -42,11 +42,15 @@ from PyQt6.QtWidgets import (
 )
 
 HOME = Path.home()
-APP_NAME = "SaveDesktopDesign"
+APP_NAME = "SaveYourKDEDesign"
+# Keep the old identity in source for v1.6's update validation and keep its
+# settings namespace, rollback paths and SDD1 codes compatible.
+LEGACY_APP_NAME = "SaveDesktopDesign"
 VERSION = "1.7.0-dev"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
-GITHUB_REPO = "redsoul1905/Savedesktopdesign"
+GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
+LEGACY_GITHUB_REPO = "redsoul1905/Savedesktopdesign"
 RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RAW_URL = ("https://raw.githubusercontent.com/" + GITHUB_REPO
            + "/{tag}/savedesktopdesign.py")
@@ -132,7 +136,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_rollback": "Sicherungskopie des aktuellen Zustands wird angelegt …",
         "msg_no_rollback": "Keine Sicherungskopie vorhanden. Sie entsteht automatisch bei der nächsten Wiederherstellung.",
         "msg_confirm_rollback": "Den Zustand von vor der letzten Wiederherstellung zurückholen?\n\nAngelegt: {when}",
-        "log_app_added": "  + SaveDesktopDesign fürs neue Gerät beigelegt",
+        "log_app_added": "  + SaveYourKDEDesign fürs neue Gerät beigelegt",
         "msg_busy_close": "Ein Vorgang läuft noch. Das Fenster kann erst danach geschlossen werden.",
         "msg_confirm_plasma": "Plasma jetzt neu starten? Der Desktop ist kurz weg.",
     },
@@ -207,7 +211,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_rollback": "Backing up the current state …",
         "msg_no_rollback": "No rollback copy available. One is created automatically the next time you restore.",
         "msg_confirm_rollback": "Roll back to the state from before the last restore?\n\nCreated: {when}",
-        "log_app_added": "  + SaveDesktopDesign bundled for the new machine",
+        "log_app_added": "  + SaveYourKDEDesign bundled for the new machine",
         "msg_busy_close": "An operation is still running. The window can only be closed once it has finished.",
         "msg_confirm_plasma": "Restart Plasma now? The desktop will disappear briefly.",
     },
@@ -282,7 +286,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_rollback": "Sauvegarde de l'état actuel …",
         "msg_no_rollback": "Aucune copie de secours disponible. Elle sera créée automatiquement lors de la prochaine restauration.",
         "msg_confirm_rollback": "Revenir à l'état d'avant la dernière restauration ?\n\nCréée : {when}",
-        "log_app_added": "  + SaveDesktopDesign joint pour la nouvelle machine",
+        "log_app_added": "  + SaveYourKDEDesign joint pour la nouvelle machine",
         "msg_busy_close": "Une opération est encore en cours. La fenêtre ne pourra être fermée qu'après.",
         "msg_confirm_plasma": "Redémarrer Plasma maintenant ? Le bureau disparaîtra brièvement.",
     },
@@ -357,7 +361,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_rollback": "Salvataggio dello stato attuale …",
         "msg_no_rollback": "Nessuna copia di sicurezza disponibile. Verrà creata automaticamente al prossimo ripristino.",
         "msg_confirm_rollback": "Tornare allo stato precedente all'ultimo ripristino?\n\nCreata: {when}",
-        "log_app_added": "  + SaveDesktopDesign incluso per la nuova macchina",
+        "log_app_added": "  + SaveYourKDEDesign incluso per la nuova macchina",
         "msg_busy_close": "Un'operazione è ancora in corso. La finestra potrà essere chiusa solo al termine.",
         "msg_confirm_plasma": "Riavviare Plasma adesso? Il desktop sparirà per un momento.",
     },
@@ -432,7 +436,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_rollback": "Guardando el estado actual …",
         "msg_no_rollback": "No hay ninguna copia de seguridad. Se crea automáticamente en la próxima restauración.",
         "msg_confirm_rollback": "¿Volver al estado anterior a la última restauración?\n\nCreada: {when}",
-        "log_app_added": "  + SaveDesktopDesign incluido para el equipo nuevo",
+        "log_app_added": "  + SaveYourKDEDesign incluido para el equipo nuevo",
         "msg_busy_close": "Todavía hay una operación en curso. La ventana solo se puede cerrar cuando haya terminado.",
         "msg_confirm_plasma": "¿Reiniciar Plasma ahora? El escritorio desaparecerá un momento.",
     },
@@ -507,7 +511,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_rollback": "Salvando o estado atual …",
         "msg_no_rollback": "Nenhuma cópia de segurança disponível. Ela é criada automaticamente na próxima restauração.",
         "msg_confirm_rollback": "Voltar ao estado anterior à última restauração?\n\nCriada: {when}",
-        "log_app_added": "  + SaveDesktopDesign incluído para o computador novo",
+        "log_app_added": "  + SaveYourKDEDesign incluído para o computador novo",
         "msg_busy_close": "Uma operação ainda está em andamento. A janela só pode ser fechada depois disso.",
         "msg_confirm_plasma": "Reiniciar o Plasma agora? A área de trabalho sumirá por um instante.",
     },
@@ -582,7 +586,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_rollback": "Mevcut durum yedekleniyor …",
         "msg_no_rollback": "Yedek kopya yok. Bir sonraki geri yüklemede otomatik olarak oluşturulur.",
         "msg_confirm_rollback": "Son geri yüklemeden önceki duruma dönülsün mü?\n\nOluşturulma: {when}",
-        "log_app_added": "  + Yeni cihaz için SaveDesktopDesign eklendi",
+        "log_app_added": "  + Yeni cihaz için SaveYourKDEDesign eklendi",
         "msg_busy_close": "Bir işlem hâlâ sürüyor. Pencere ancak bittikten sonra kapatılabilir.",
         "msg_confirm_plasma": "Plasma şimdi yeniden başlatılsın mı? Masaüstü kısa süreliğine kaybolur.",
     },
@@ -837,7 +841,8 @@ def _version_tuple(v: str) -> tuple:
                 break
             digits += ch
         parts.append(int(digits) if digits else 0)
-    return tuple(parts)
+    # A released version must update a development build with the same number.
+    return tuple((parts + [0, 0, 0])[:3]) + (0 if "-" in v else 1,)
 
 
 # Public sharing is deliberately a different format from a private backup.
@@ -1339,8 +1344,9 @@ def desktop_setup(manifest: dict, current: dict) -> dict:
         match = re.search(r"^\s*Candidate:\s*(\S+)", output, re.M)
         candidate = match.group(1) if match else ""
         # Minimal KDE metapackage; keep the existing desktop and login manager.
-        command = ["apt-get", "install", "--no-remove", "--no-install-recommends", "-y", "kde-plasma-desktop"]
-        if not _run_cmd(["apt-cache", "show", "kde-plasma-desktop"], 30):
+        command = ["apt-get", "install", "--no-remove", "--no-install-recommends", "-y",
+                   "kde-plasma-desktop", "polkit-kde-agent-1"]
+        if not _run_cmd(["apt-cache", "show", "kde-plasma-desktop", "polkit-kde-agent-1"], 30):
             command = None
         # Plasma 5 distributions split the Wayland session into this package.
         if manifest["profile"].get("session") == "wayland" and _run_cmd(
@@ -1349,7 +1355,7 @@ def desktop_setup(manifest: dict, current: dict) -> dict:
                 command.append("plasma-workspace-wayland")
     elif distro == "fedora" and shutil.which("dnf"):
         output = _run_cmd(["dnf", "repoquery", "--available", "--latest-limit=1",
-                           "--qf", "%{version}", "plasma-workspace"], 60) or ""
+                           "--qf", "%{version}\\n", "plasma-workspace"], 60) or ""
         versions = [s.strip() for s in output.splitlines() if plasma_version(s.strip())]
         candidate = max(versions, key=plasma_version) if versions else ""
         command = ["dnf", "install", "-y", "@kde-desktop-environment"]
@@ -1358,6 +1364,10 @@ def desktop_setup(manifest: dict, current: dict) -> dict:
         match = re.search(r"^Version\s*:\s*(\S+)", output, re.M)
         candidate = match.group(1) if match else ""
         command = ["pacman", "-S", "--needed", "--noconfirm", "plasma-meta"]
+        if _run_cmd(["pacman", "-Qu"], 30):
+            command = None
+            note("Arch: ausstehende Systemupdates zuerst vollständig über die Systemaktualisierung installieren. Keine Plasma-Teilaktualisierung.",
+                 "Arch: complete pending system updates through the system updater first. No partial Plasma upgrade.")
     else:
         note("Für dieses System ist keine automatische KDE-Installation hinterlegt.",
              "Automatic KDE installation is not configured for this system.")
@@ -1422,6 +1432,31 @@ def extension_preflight(path: Path, current: dict):
                             or plasma_version(current["plasma"]) < plasma_version(minimum)):
                 issues.append(f"{name}: Plasma minimum / mindestens {minimum[:80]}")
     return rows, issues
+
+
+def desktop_transaction_preview(command: list[str]) -> str:
+    """Ask the native solver without elevation or any package installation."""
+    manager = command[0]
+    args = [arg for arg in command if arg not in ("-y", "--noconfirm")]
+    if manager == "apt-get":
+        args.insert(1, "--simulate")
+    elif manager == "dnf":
+        args.insert(1, "--assumeno")
+    elif manager == "pacman":
+        args.extend(["--print", "--print-format", "%n %v"])
+    else:
+        raise ValueError("Unsupported package manager")
+    result = subprocess.run(args, capture_output=True, text=True, timeout=180,
+                            env={**os.environ, "LC_ALL": "C"})
+    output = result.stdout + "\n" + result.stderr
+    if manager == "dnf":
+        valid = result.returncode in (0, 1) and "Transaction Summary:" in output and "Operation aborted" in output
+    else:
+        valid = result.returncode == 0 and bool(result.stdout.strip())
+    if not valid:
+        raise ValueError("Package transaction could not be previewed; nothing installed.\n" + output[-2000:])
+    # Preserve the transaction summary and tail of the package list in the UI.
+    return output[-12000:]
 
 
 def design_install_plan(manifest: dict, current: dict, styles: list[str]):
@@ -1519,8 +1554,15 @@ class ShareWorker(QThread):
                 issues = compatibility_issues(manifest, current, self.styles)
                 extensions, extension_issues = extension_preflight(self.dest, current)
                 issues.extend(extension_issues)
+                setup = desktop_setup(manifest, current)
+                if setup.get("command"):
+                    try:
+                        setup["preview"] = desktop_transaction_preview(setup["command"])
+                    except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+                        setup["command"] = None
+                        setup["notes"].append(str(error))
                 self.ready.emit(str(self.dest), {"manifest": manifest, "issues": issues,
-                                "setup": desktop_setup(manifest, current), "extensions": extensions,
+                                "setup": setup, "extensions": extensions,
                                 "plan": design_install_plan(manifest, current, self.styles)})
             else:
                 with tempfile.TemporaryDirectory(prefix="sdd-share-") as tmp:
@@ -1552,7 +1594,8 @@ class DesktopSetupWorker(ShareWorker):
             manifest = inspect_public_archive(self.dest)
             # Recompute after consent; repository changes require a new review.
             plan = desktop_setup(manifest, desktop_profile(self.screens))
-            if not plan.get("command") or plan != self.approved:
+            if not plan.get("command") or any(plan.get(k) != self.approved.get(k)
+                                              for k in ("command", "candidate", "distro")):
                 raise ValueError("Installation plan changed. Import the code again / Installationsplan geändert: Code erneut importieren.")
             command = plan["command"]
             executable = shutil.which(command[0])
@@ -1627,12 +1670,25 @@ class UpdateWorker(QThread):
         self.timeout = timeout
 
     def _get(self, url: str, accept: str) -> bytes:
-        req = urllib.request.Request(url, headers={
-            "Accept": accept,
-            "User-Agent": f"{APP_NAME}/{VERSION}",
-        })
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            return resp.read(MAX_DOWNLOAD)
+        urls = [url]
+        # Temporary rename bridge: both repositories are owned by the same
+        # maintainer. Only a missing new endpoint falls back, not arbitrary errors.
+        if url.startswith(("https://api.github.com/repos/" + GITHUB_REPO + "/",
+                           "https://raw.githubusercontent.com/" + GITHUB_REPO + "/")):
+            urls.append(url.replace(GITHUB_REPO, LEGACY_GITHUB_REPO, 1))
+        for index, endpoint in enumerate(urls):
+            req = urllib.request.Request(endpoint, headers={
+                "Accept": accept, "User-Agent": f"{APP_NAME}/{VERSION}",
+            })
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    content = resp.read(MAX_DOWNLOAD + 1)
+                    if len(content) > MAX_DOWNLOAD:
+                        raise ValueError("Update response too large")
+                    return content
+            except urllib.error.HTTPError as error:
+                if error.code != 404 or index == len(urls) - 1:
+                    raise
 
     def run(self):
         try:
@@ -1987,7 +2043,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         global _current_lang
-        self.settings = QSettings(APP_NAME, APP_NAME)
+        self.settings = QSettings(LEGACY_APP_NAME, LEGACY_APP_NAME)
         _current_lang = detect_language(self.settings)
         self.setWindowIcon(QIcon.fromTheme("preferences-desktop-theme"))
         self.resize(720, 660)
@@ -2195,9 +2251,14 @@ class MainWindow(QMainWindow):
             self.share_log.append(message)
             if setup.get("command"):
                 question = message + "\n\n" + T("share_desktop_install") + "\n" + shlex.join(setup["command"])
-                if QMessageBox.question(self, APP_NAME, question,
-                                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                        QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                dialog = QMessageBox(self)
+                dialog.setWindowTitle(APP_NAME)
+                dialog.setText(question)
+                dialog.setDetailedText(setup.get("preview", ""))
+                dialog.setInformativeText("Paketplan unter Details prüfen / Review the package plan under Details")
+                dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                dialog.setDefaultButton(QMessageBox.StandardButton.No)
+                if dialog.exec() == QMessageBox.StandardButton.Yes:
                     self._start_share(DesktopSetupWorker(screen_profile(), Path(value), setup), "share_desktop_working")
                     return
             if details.get("plan"):
@@ -2485,7 +2546,7 @@ class MainWindow(QMainWindow):
         lines = [
             "#!/usr/bin/env bash",
             'cd "$(dirname "$0")"',
-            "echo '=== SaveDesktopDesign ==='",
+            "echo '=== SaveYourKDEDesign ==='",
         ]
         # --- Arch / CachyOS ---
         if (pkg_dir / "pacman-repos.txt").exists() and shutil.which("pacman-conf"):
@@ -2686,7 +2747,7 @@ class MainWindow(QMainWindow):
             # es muss diese App sein und fehlerfrei kompilieren.
             if (len(src) < 20000 or APP_NAME not in src
                     or "class MainWindow" not in src):
-                raise ValueError("downloaded file is not SaveDesktopDesign")
+                raise ValueError("downloaded file is not " + APP_NAME)
             compile(src, str(target), "exec")
             mode = target.stat().st_mode & 0o777
             shutil.copy2(target, target.with_name(target.name + ".bak"))
@@ -2714,7 +2775,33 @@ class MainWindow(QMainWindow):
             shell=True)
 
 
+def migrate_installed_branding(app_file: Path):
+    """In-app updates replace only the source; migrate the old menu label too.
+
+    Git checkouts and custom launchers are untouched. Legacy settings/storage
+    deliberately keep their paths and are not copied or deleted.
+    """
+    installed = HOME / ".local/share/savedesktopdesign/savedesktopdesign.py"
+    if app_file.resolve() != installed.resolve():
+        return
+    entry = HOME / ".local/share/applications/savedesktopdesign.desktop"
+    if entry.is_file() and not entry.is_symlink():
+        content = entry.read_text()
+        if "\nName=SaveDesktopDesign\n" in content:
+            entry.write_text(content.replace("\nName=SaveDesktopDesign\n", "\nName=" + APP_NAME + "\n"))
+    launcher = HOME / ".local/bin/saveyourkdedesign"
+    if not launcher.exists() and not launcher.is_symlink():
+        launcher.parent.mkdir(parents=True, exist_ok=True)
+        with launcher.open("x") as stream:
+            stream.write("#!/bin/sh\nexec python3 " + shlex.quote(str(installed)) + ' "$@"\n')
+        launcher.chmod(0o755)
+
+
 def main():
+    try:
+        migrate_installed_branding(Path(__file__))
+    except OSError as error:
+        print(f"Launcher migration skipped: {error}", file=sys.stderr)
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     win = MainWindow()

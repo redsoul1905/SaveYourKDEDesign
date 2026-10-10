@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=SaveDesktopDesign
+Name=SaveYourKDEDesign
 Comment=KDE-Plasma-Design & Paketlisten sichern und wiederherstellen
-Exec=savedesktopdesign
+Exec=saveyourkdedesign
 Icon=preferences-desktop-theme
 Terminal=false
 Categories=Utility;Settings;

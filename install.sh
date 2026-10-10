@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
-# SaveDesktopDesign — Installation ins Benutzerverzeichnis
+# SaveYourKDEDesign — Installation ins Benutzerverzeichnis
 set -e
 
+# Stable paths keep existing installations and desktop entries upgradeable.
 APP_DIR="$HOME/.local/share/savedesktopdesign"
 BIN_DIR="$HOME/.local/bin"
 DESKTOP_FILE="$HOME/.local/share/applications/savedesktopdesign.desktop"
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-REPO_URL="https://github.com/redsoul1905/Savedesktopdesign.git"
+REPO_URL="https://github.com/redsoul1905/SaveYourKDEDesign.git"
+LEGACY_REPO_URL="https://github.com/redsoul1905/Savedesktopdesign.git"
 
 if [[ "$1" == "--uninstall" ]]; then
     rm -rf "$APP_DIR"
-    rm -f "$BIN_DIR/savedesktopdesign" "$DESKTOP_FILE"
-    echo "SaveDesktopDesign wurde entfernt. / SaveDesktopDesign has been removed."
+    rm -f "$BIN_DIR/savedesktopdesign" "$BIN_DIR/saveyourkdedesign" "$DESKTOP_FILE"
+    echo "SaveYourKDEDesign wurde entfernt. / SaveYourKDEDesign has been removed."
     exit 0
 fi
 
 if [[ "$1" == "--update" ]]; then
-    echo "Updating SaveDesktopDesign ..."
+    echo "Updating SaveYourKDEDesign ..."
     if [[ -d "$SRC_DIR/.git" ]] && command -v git >/dev/null; then
         if ! git -C "$SRC_DIR" diff --quiet || ! git -C "$SRC_DIR" diff --cached --quiet; then
             echo "Local changes in $SRC_DIR — commit or stash them first:"
@@ -31,6 +33,9 @@ if [[ "$1" == "--update" ]]; then
     else
         echo "No git repository found — downloading a fresh copy ..."
         command -v git >/dev/null || { echo "git is required for updating."; exit 1; }
+        if ! git ls-remote "$REPO_URL" HEAD >/dev/null 2>&1; then
+            REPO_URL="$LEGACY_REPO_URL"
+        fi
         TMP_DIR="$(mktemp -d)"
         git clone --depth 1 "$REPO_URL" "$TMP_DIR/repo"
         cp -f "$TMP_DIR/repo/savedesktopdesign.py" "$TMP_DIR/repo/install.sh" "$SRC_DIR/"
@@ -58,22 +63,24 @@ fi
 mkdir -p "$APP_DIR" "$BIN_DIR" "$(dirname "$DESKTOP_FILE")"
 cp "$SRC_DIR/savedesktopdesign.py" "$APP_DIR/"
 
-cat > "$BIN_DIR/savedesktopdesign" <<EOF
+for launcher in saveyourkdedesign savedesktopdesign; do
+cat > "$BIN_DIR/$launcher" <<EOF
 #!/usr/bin/env bash
 exec python3 "$APP_DIR/savedesktopdesign.py" "\$@"
 EOF
-chmod +x "$BIN_DIR/savedesktopdesign"
+chmod +x "$BIN_DIR/$launcher"
+done
 
 cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
-Name=SaveDesktopDesign
+Name=SaveYourKDEDesign
 Comment=KDE-Plasma-Design & Paketlisten sichern und wiederherstellen
-Exec=python3 $APP_DIR/savedesktopdesign.py
+Exec="$BIN_DIR/saveyourkdedesign"
 Icon=preferences-desktop-theme
 Terminal=false
 Categories=Utility;Settings;
 EOF
 
-echo "Installiert! Du findest 'SaveDesktopDesign' im Anwendungsmenü"
-echo "oder startest sie mit: savedesktopdesign"
+echo "Installiert! Du findest 'SaveYourKDEDesign' im Anwendungsmenü"
+echo "oder startest sie mit: saveyourkdedesign (alter Alias: savedesktopdesign)"
