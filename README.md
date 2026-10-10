@@ -56,9 +56,9 @@ one-click clone across arbitrary KDE releases or screen layouts.
 Validation: offline mocked Ubuntu/Fedora/Arch repositories and administrator
 transactions, minimum-version checks, cancellation and active-session checks.
 No real operating system packages are installed by the tests. Additional real
-repository checks on 2026-10-10 resolved the installation on Ubuntu 24.04
-(`apt-get --simulate`) and Fedora 44 (`dnf --assumeno`) in disposable containers.
-The offered Plasma versions were 5.27.12 and 6.7.5 respectively. These are not
+repository checks on 2026-10-10 resolved the installation on Ubuntu 24.04 and
+26.04 (`apt-get --simulate`) and Fedora 44 (`dnf --assumeno`) in disposable
+containers. The offered Plasma versions were 5.27.12, 6.6.6 and 6.7.5 respectively. These are not
 full desktop tests: VM installation/relogin/restore verification is still
 pending before release. Fedora's empty-container plan included about 3 GiB of
 downloads; actual desktop transactions differ and must be reviewed.

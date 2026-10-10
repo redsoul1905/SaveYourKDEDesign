@@ -1456,7 +1456,8 @@ def desktop_transaction_preview(command: list[str]) -> str:
     if not valid:
         raise ValueError("Package transaction could not be previewed; nothing installed.\n" + output[-2000:])
     # Preserve the transaction summary and tail of the package list in the UI.
-    return output[-12000:]
+    prefix = "[Auszug: letzte 12000 Zeichen / Excerpt: last 12000 characters]\n" if len(output) > 12000 else ""
+    return prefix + output[-12000:]
 
 
 def design_install_plan(manifest: dict, current: dict, styles: list[str]):

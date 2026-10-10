@@ -359,6 +359,7 @@ class GuiTests(unittest.TestCase):
             code = "SDD1:abcdef.sdd:" + app.sha256_file(path)
             with patch.object(app, "QSettings", return_value=settings):
                 window = app.MainWindow()
+            self.assertTrue(window.windowTitle().startswith("SaveYourKDEDesign"))
             self.assertEqual(window.findChild(app.QTabWidget).tabText(2), "Design teilen")
             window._last_share_code = code
             window.share_code.setText(code)
