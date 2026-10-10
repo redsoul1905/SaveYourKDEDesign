@@ -12,8 +12,10 @@ Sprachen: Deutsch, English, Français, Italiano, Español, Português, Türkçe
 """
 
 import io
+import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -25,20 +27,22 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QSettings, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtGui import QFont, QIcon, QGuiApplication
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QProgressBar, QPushButton, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QInputDialog, QLineEdit, QStyleFactory,
 )
 
 HOME = Path.home()
 APP_NAME = "SaveDesktopDesign"
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/Savedesktopdesign"
@@ -585,6 +589,46 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
 _current_lang = "de"
 
+# New sharing strings fall back to English in the other supported languages.
+TRANSLATIONS["en"].update({
+    "tab_share": "Share design", "share_export": "Create export code …",
+    "share_import": "Import code …", "share_copy": "Copy code",
+    "share_title": "Share your KDE design via Catbox",
+    "share_last_code": "Last successful export code",
+    "share_hint": "No account needed. Public uploads up to 200 MB. Anonymous files may be deleted after two years without access. Keep a local backup.",
+    "share_consent": "Publish a design package to Catbox? Anyone with the code can download it. This exports selected visual settings, themes, fonts and wallpapers, not your full backup or installed-app list. Theme assets can still contain personal content: review your selected theme and wallpaper before sharing. Only share content you may redistribute. Catbox's terms apply: https://catbox.moe/legal.php",
+    "share_upload": "Creating and uploading the public design package …",
+    "share_download": "Downloading and checking the design package …",
+    "share_code": "Paste the complete SDD1 export code:",
+    "share_ready": "Uploaded. Copy this code to share the design. Keep the complete code, including its checksum.",
+    "share_review": "The downloaded package has passed the file and checksum checks. Themes and widgets may contain executable code. Only apply designs from authors you trust. Your current settings will be backed up first. Full visual identity cannot be verified automatically.",
+    "share_blocked": "This design cannot currently be applied faithfully. No design settings have been changed. Resolve these differences first:\n\n",
+    "share_apply": "Apply this design?", "share_error": "Sharing failed",
+    "share_complete": "Design files applied. Log out and back in to load the panel layout and themes. Check the result before sharing it further; identical rendering has not been verified.",
+    "share_details": "Package contents", "share_omitted": "Not exported",
+    "share_install": "Install the missing Kvantum theme engine using this system's package manager? Administrator authentication is required. Only the locally defined package is installed; no commands from the design package are run. Remaining compatibility differences will be checked again afterwards.",
+    "share_installing": "Installing the missing theme engine …",
+})
+TRANSLATIONS["de"].update({
+    "tab_share": "Design teilen", "share_export": "Export-Code erstellen …",
+    "share_import": "Code importieren …", "share_copy": "Code kopieren",
+    "share_title": "KDE-Design über Catbox teilen",
+    "share_last_code": "Letzter erfolgreicher Export-Code",
+    "share_hint": "Ohne Konto. Öffentliche Uploads bis 200 MB. Anonyme Dateien können nach zwei Jahren ohne Zugriff gelöscht werden. Lokales Backup behalten.",
+    "share_consent": "Design-Paket auf Catbox veröffentlichen? Jeder mit dem Code kann es herunterladen. Exportiert werden ausgewählte optische Einstellungen, Themes, Schriften und Wallpaper, nicht dein vollständiges Backup oder die Liste installierter Programme. Theme-Dateien können trotzdem persönliche Inhalte enthalten: prüfe dein ausgewähltes Theme und Wallpaper vor dem Teilen. Teile nur Inhalte, die du weitergeben darfst. Es gelten die Catbox-Bedingungen: https://catbox.moe/legal.php",
+    "share_upload": "Öffentliches Design-Paket wird erstellt und hochgeladen …",
+    "share_download": "Design-Paket wird heruntergeladen und geprüft …",
+    "share_code": "Vollständigen SDD1-Export-Code einfügen:",
+    "share_ready": "Hochgeladen. Diesen Code zum Teilen kopieren. Den vollständigen Code einschließlich Prüfsumme behalten.",
+    "share_review": "Dateien und Prüfsumme des Downloads wurden geprüft. Themes und Widgets können ausführbaren Code enthalten. Wende nur Designs vertrauenswürdiger Autoren an. Deine bisherigen Einstellungen werden zuerst gesichert. Eine identische Darstellung lässt sich nicht automatisch bestätigen.",
+    "share_blocked": "Dieses Design kann derzeit nicht originalgetreu angewendet werden. Die Design-Einstellungen wurden nicht geändert. Behebe zunächst diese Unterschiede:\n\n",
+    "share_apply": "Dieses Design anwenden?", "share_error": "Teilen fehlgeschlagen",
+    "share_complete": "Design-Dateien übernommen. Bitte ab- und wieder anmelden, damit Panel-Layout und Themes geladen werden. Prüfe das Ergebnis; eine identische Darstellung wurde nicht bestätigt.",
+    "share_details": "Paketinhalt", "share_omitted": "Nicht exportiert",
+    "share_install": "Fehlende Kvantum-Theme-Engine mit der Paketverwaltung dieses Systems installieren? Dafür ist eine Administrator-Anmeldung nötig. Installiert wird nur das im Programm festgelegte Paket; keine Befehle aus dem Design-Paket. Anschließend werden verbleibende Kompatibilitätsunterschiede erneut geprüft.",
+    "share_installing": "Fehlende Theme-Engine wird installiert …",
+})
+
 
 def T(key: str) -> str:
     """Übersetzten Text für die aktuelle Sprache liefern."""
@@ -762,10 +806,7 @@ def make_rollback(rel_paths: list[str], categories: list[str]) -> str:
     tmp = dest.with_name(dest.name + ".new")
     with tarfile.open(tmp, "w:gz") as tar:
         for rel in present:
-            try:
-                tar.add(HOME / rel, arcname=f"home/{rel}")
-            except (PermissionError, OSError):
-                pass
+            tar.add(HOME / rel, arcname=f"home/{rel}")
         data = json.dumps(manifest, indent=2).encode()
         info = tarfile.TarInfo("manifest.json")
         info.size = len(data)
@@ -787,6 +828,610 @@ def _version_tuple(v: str) -> tuple:
             digits += ch
         parts.append(int(digits) if digits else 0)
     return tuple(parts)
+
+
+# Public sharing is deliberately a different format from a private backup.
+CATBOX_API = "https://catbox.moe/user/api.php"
+CATBOX_FILES = "https://files.catbox.moe/"
+SHARE_LIMIT = 200_000_000
+EXPANDED_LIMIT = 1_000_000_000
+CODE_RE = re.compile(r"SDD1:([a-zA-Z0-9]{6,16}\.sdd):([0-9a-f]{64})\Z")
+HOME_TOKEN = "@SDD_HOME@"
+VISUAL_CONFIGS = {
+    "kdeglobals", "kwinrc", "plasmarc", "plasmashellrc",
+    "plasma-org.kde.plasma.desktop-appletsrc", "kcminputrc",
+    "ksplashrc", "kscreenlockerrc", "breezerc", "oxygenrc",
+    "klassyrc", "lightlyrc", "sierrabreezeenhancedrc",
+    "gtk-3.0/settings.ini", "gtk-4.0/settings.ini",
+}
+# Explicit keys only: arbitrary widget settings can contain notes, URLs,
+# credentials, local file paths, or commands. Unknown keys never go public.
+VISUAL_KEYS = set("""
+ColorScheme LookAndFeelPackage widgetStyle font fixed menuFont smallestReadableFont
+toolBarFont activeFont shadeSortColumn contrast SingleClick AnimationDurationFactor
+XftAntialias XftHintStyle XftSubPixel XftDPI AccentColor AccentColorFromWallpaper
+cursorTheme cursorSize Theme name theme library BorderSize BorderSizeAuto
+ButtonsOnLeft ButtonsOnRight NoPlugin CustomButtonPositions
+plugin wallpaperplugin formfactor location activityId lastScreen screen
+immutability containmentId SystrayContainmentId AppletOrder
+panelVisibility alignment floating lengthMode minLength maxLength thickness
+height width offset maximumLength minimumLength
+iconSize iconSizeRatio taskbarPosition showToolTips
+showDate dateFormat use24hClock showSeconds boldText fontFamily fontSize
+showWeekNumbers firstDayOfWeek showLocalTimezone
+Image FillMode Blur ShowMediaControls showDesktopLayout
+BackgroundNormal BackgroundAlternate ForegroundNormal ForegroundInactive
+ForegroundActive ForegroundLink ForegroundVisited ForegroundNegative
+ForegroundNeutral ForegroundPositive DecorationFocus DecorationHover
+activeBackground activeBlend activeForeground inactiveBackground inactiveBlend
+inactiveForeground Color ColorEffect ColorAmount ContrastEffect ContrastAmount
+IntensityEffect IntensityAmount Enable ApplyToInactive ChangeSelectionColor
+DisableLut FilterContrast
+gtk-theme-name gtk-icon-theme-name gtk-font-name gtk-cursor-theme-name
+gtk-cursor-theme-size gtk-application-prefer-dark-theme
+BlurStrength NoiseStrength Radius cornerRadius
+""".split()) - {"activityId"}  # activity IDs refer to private, machine-local state
+ASSET_BASES = (
+    "plasma/desktoptheme", "plasma/look-and-feel", "plasma/plasmoids",
+    "plasma/wallpapers", "aurorae/themes", "icons", "color-schemes",
+    "wallpapers", "fonts", "kwin/scripts", "kwin/effects", "Kvantum", "themes",
+)
+
+
+def read_kconfig(path: Path) -> list[tuple[str, str, str]]:
+    """Preserve nested KConfig group syntax without interpreting interpolation."""
+    if not path.is_file():
+        return []
+    if path.stat().st_size > 4_000_000:
+        raise ValueError(f"Configuration too large: {path.name}")
+    group = ""
+    values = []
+    for line in path.read_text(encoding="utf-8", errors="strict").splitlines():
+        if line.startswith("[") and line.endswith("]"):
+            group = line
+        elif "=" in line and not line.startswith(("#", ";")):
+            key, value = line.split("=", 1)
+            values.append((group, key.strip(), value))
+    return values
+
+
+def screen_profile() -> list[dict]:
+    # Called in the GUI thread before starting a worker.
+    app = QGuiApplication.instance()
+    if app is None:
+        return []
+    return sorted([{"width": s.geometry().width(), "height": s.geometry().height(),
+                    "x": s.geometry().x(), "y": s.geometry().y(),
+                    "scale": round(s.devicePixelRatio(), 3)}
+                   for s in app.screens()], key=lambda s: (s["x"], s["y"]))
+
+
+def desktop_profile(screens: list[dict]) -> dict:
+    out = _run_cmd(["plasmashell", "--version"], 10) or ""
+    version = re.search(r"\b(\d+\.\d+(?:\.\d+)?)\b", out)
+    return {"plasma": version.group(1) if version else "",
+            "session": os.environ.get("XDG_SESSION_TYPE", ""),
+            "screens": screens}
+
+
+def share_path_allowed(rel: str) -> bool:
+    if not isinstance(rel, str) or "\\" in rel or "\x00" in rel:
+        return False
+    parts = rel.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return False
+    if rel in {".config/" + n for n in VISUAL_CONFIGS}:
+        return True
+    if rel.startswith(".config/Kvantum/"):
+        return True
+    return any(rel.startswith(".local/share/" + base + "/") for base in ASSET_BASES)
+
+
+def _safe_asset_name(name: str) -> bool:
+    return bool(name and re.fullmatch(r"[\w .+@#-]+", name) and name not in (".", ".."))
+
+
+def public_design(stage: Path, screens: list[dict], log=lambda message: None) -> dict:
+    """Build a visual-only tree, never a copy of the user's private backup."""
+    home = stage / "home"
+    home.mkdir()
+    sources = [HOME / ".local/share", Path("/usr/local/share"), Path("/usr/share")]
+    requirements, omitted, paths = [], [], set()
+    copied_bytes = 0
+    copied_count = 0
+    seen = set()
+
+    def copy_asset(src: Path, rel: str, allowed_root: Path):
+        nonlocal copied_bytes, copied_count
+        if not share_path_allowed(rel):
+            raise ValueError("Invalid public asset destination")
+        # Resolve icon symlinks into regular files, but never follow links into
+        # private directories or copy sockets/devices/compiled binaries.
+        real = src.resolve(strict=True)
+        if not real.is_relative_to(allowed_root.resolve()):
+            raise ValueError(f"Asset link leaves its theme directory: {src.name}")
+        if real.is_dir():
+            if real in seen:
+                raise ValueError("Cyclic theme directory link")
+            seen.add(real)
+            for child in sorted(real.iterdir()):
+                copy_asset(child, rel + "/" + child.name, allowed_root)
+            seen.remove(real)
+        elif real.is_file():
+            size = real.stat().st_size
+            if copied_bytes + size > EXPANDED_LIMIT or copied_count >= 50000:
+                raise ValueError("Design exceeds the unpacked size/file limit")
+            with real.open("rb") as stream:
+                if stream.read(4) == b"\x7fELF":
+                    raise ValueError(f"Compiled plugin needs installation on the target: {src.name}")
+            dst = home / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(real, dst)
+            copied_bytes += size
+            copied_count += 1
+            paths.add(rel)
+        else:
+            raise ValueError(f"Unsupported asset type: {src.name}")
+
+    added = set()
+
+    def asset(base: str, name: str):
+        if not _safe_asset_name(name) or (base, name) in added:
+            return
+        added.add((base, name))
+        rel = base + "/" + name
+        candidates = [root / rel for root in sources]
+        if base == "icons":
+            candidates.insert(1, HOME / ".icons" / name)
+        if base == "themes":
+            candidates.insert(1, HOME / ".themes" / name)
+        if base == "Kvantum":
+            candidates = [HOME / ".config/Kvantum" / name,
+                          HOME / ".themes" / name / "Kvantum",
+                          HOME / ".local/share/themes" / name / "Kvantum", *candidates]
+        found = [p for p in candidates if p.exists()]
+        if not found:
+            requirements.append({"kind": "asset", "name": rel})
+            return
+        log("  + " + rel)
+        # Merge lower-priority system defaults first, then user overrides.
+        for src in reversed(found):
+            target_rel = (".config/" if base == "Kvantum" else ".local/share/") + rel
+            copy_asset(src, target_rel, src.parent)
+        if base == "icons":
+            for src in found:
+                for _, key, value in read_kconfig(src / "index.theme"):
+                    if key == "Inherits":
+                        for parent in value.split(","):
+                            asset("icons", parent.strip())
+
+    for filename in sorted(VISUAL_CONFIGS):
+        # Plasma stores global-theme defaults separately. Export their effective
+        # values, then overlay explicit user choices, so distro defaults on the
+        # receiving machine cannot replace the source's selected theme.
+        defaults = read_kconfig(HOME / ".config/kdedefaults" / filename)
+        overrides = read_kconfig(HOME / ".config" / filename)
+        values = list({(g, k): (g, k, v) for g, k, v in [*defaults, *overrides]}.values())
+        lines, group_before = [], None
+        for group, key, value in values:
+            enabled_effect = filename == "kwinrc" and group == "[Plugins]" and key.endswith("Enabled")
+            if key not in VISUAL_KEYS and not enabled_effect:
+                omitted.append(filename + ":" + key)
+                continue
+            if "\x00" in value or len(value) > 8192:
+                continue
+            if key == "Image":
+                raw = urllib.parse.unquote(value.removeprefix("file://"))
+                wallpaper = Path(raw)
+                if not wallpaper.is_file():
+                    requirements.append({"kind": "wallpaper", "name": "Unavailable wallpaper"})
+                    continue
+                if wallpaper.stat().st_size > SHARE_LIMIT:
+                    raise ValueError("Wallpaper exceeds 200 MB")
+                digest = sha256_file(wallpaper)[:16]
+                rel = ".local/share/wallpapers/sdd/" + digest + wallpaper.suffix
+                copy_asset(wallpaper, rel, wallpaper.parent)
+                value = "file://" + HOME_TOKEN + "/" + rel
+            elif "/" in value or "\\" in value or "://" in value or str(HOME) in value:
+                omitted.append(filename + ":" + key)
+                continue
+            if filename == "kdeglobals":
+                if key == "LookAndFeelPackage":
+                    asset("plasma/look-and-feel", value)
+                elif key == "ColorScheme":
+                    asset("color-schemes", value + ".colors")
+                elif group == "[Icons]" and key == "Theme":
+                    asset("icons", value)
+                elif key == "widgetStyle":
+                    requirements.append({"kind": "style", "name": value})
+                elif key in {"font", "fixed", "menuFont", "smallestReadableFont", "toolBarFont", "activeFont"}:
+                    font = _run_cmd(["fc-match", "-f", "%{file}", value.split(",")[0]], 10)
+                    if font and Path(font).is_file():
+                        fp = Path(font)
+                        copy_asset(fp, ".local/share/fonts/sdd/" + sha256_file(fp)[:16] + fp.suffix, fp.parent)
+                    else:
+                        requirements.append({"kind": "font", "name": value.split(",")[0]})
+            if filename == "kcminputrc" and key == "cursorTheme":
+                asset("icons", value)
+            if filename.startswith("gtk-"):
+                if key == "gtk-theme-name":
+                    asset("themes", value)
+                elif key in {"gtk-icon-theme-name", "gtk-cursor-theme-name"}:
+                    asset("icons", value)
+            if filename == "plasmarc" and group == "[Theme]" and key == "name":
+                asset("plasma/desktoptheme", value)
+            if key == "wallpaperplugin":
+                asset("plasma/wallpapers", value)
+            if filename == "plasma-org.kde.plasma.desktop-appletsrc" and key == "plugin":
+                asset("plasma/plasmoids", value)
+            if filename == "kwinrc" and key == "library":
+                requirements.append({"kind": "decoration", "name": value})
+            if filename == "kwinrc" and key == "theme" and value.startswith("__aurorae__svg__"):
+                asset("aurorae/themes", value.removeprefix("__aurorae__svg__"))
+            if enabled_effect and value.lower() == "true":
+                effect = key.removesuffix("Enabled")
+                # User scripts/effects are portable assets; native effects must
+                # already be installed in a compatible build on the target.
+                available = False
+                for base in ("kwin/scripts", "kwin/effects"):
+                    if any((root / base / effect).exists() for root in sources):
+                        asset(base, effect)
+                        available = True
+                if not available:
+                    requirements.append({"kind": "effect", "name": effect})
+            if group != group_before:
+                lines.append(group)
+                group_before = group
+            lines.append(key + "=" + value)
+        if lines:
+            dest = home / ".config" / filename
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            paths.add(".config/" + filename)
+
+    # Kvantum's selected theme includes its own SVG/config assets.
+    kv = read_kconfig(HOME / ".config/Kvantum/kvantum.kvconfig")
+    theme = next((v for _, k, v in kv if k == "theme"), "")
+    if _safe_asset_name(theme):
+        asset("Kvantum", theme)
+        if theme.endswith("#"):
+            asset("Kvantum", theme.removesuffix("#"))
+        rel = ".config/Kvantum/kvantum.kvconfig"
+        (home / rel).parent.mkdir(parents=True, exist_ok=True)
+        (home / rel).write_text("[General]\ntheme=" + theme + "\n")
+        paths.add(rel)
+    if not paths:
+        raise ValueError("No shareable KDE design found")
+    profile = desktop_profile(screens)
+    if not profile.get("plasma") or not profile.get("session") or not profile.get("screens"):
+        raise ValueError("Cannot determine the KDE version, session or screen layout; export from your KDE desktop session")
+    return {"app": APP_NAME, "version": VERSION, "public_design": 1,
+            "created": datetime.now().isoformat(timespec="seconds"),
+            "profile": profile, "paths": sorted(set(paths)),
+            "requirements": requirements, "omitted_settings": len(omitted),
+            "categories": [], "with_packages": False}
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError("Unexpected redirect from Catbox")
+
+
+def catbox_open(request):
+    return urllib.request.build_opener(NoRedirect()).open(request, timeout=60)
+
+
+def upload_design(path: Path, progress=lambda value: None) -> str:
+    size = path.stat().st_size
+    if not 0 < size <= SHARE_LIMIT:
+        raise ValueError("Catbox accepts design packages up to 200 MB")
+    boundary = "sdd" + uuid.uuid4().hex
+    head = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"reqtype\"\r\n\r\nfileupload\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"fileToUpload\"; filename=\"design.sdd\"\r\n"
+            "Content-Type: application/octet-stream\r\n\r\n").encode()
+    tail = f"\r\n--{boundary}--\r\n".encode()
+
+    def body():
+        yield head
+        sent = 0
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                yield chunk
+                sent += len(chunk)
+                progress(int(sent * 100 / size))
+        yield tail
+
+    request = urllib.request.Request(CATBOX_API, data=body(), headers={
+        "Content-Type": "multipart/form-data; boundary=" + boundary,
+        "Content-Length": str(len(head) + size + len(tail)),
+        "User-Agent": APP_NAME + "/" + VERSION}, method="POST")
+    with catbox_open(request) as response:
+        url = response.read(4096).decode("utf-8").strip()
+    match = re.fullmatch(re.escape(CATBOX_FILES) + r"([a-zA-Z0-9]{6,16}\.sdd)", url)
+    if not match:
+        raise ValueError("Catbox rejected the upload or returned an unexpected response")
+    return "SDD1:" + match.group(1) + ":" + sha256_file(path)
+
+
+def download_design(code: str, path: Path, progress=lambda value: None):
+    match = CODE_RE.fullmatch(code.strip())
+    if not match:
+        raise ValueError("Invalid SDD1 code. Copy the complete code, including its checksum.")
+    req = urllib.request.Request(CATBOX_FILES + match.group(1),
+                                 headers={"User-Agent": APP_NAME + "/" + VERSION})
+    created = False
+    try:
+        with catbox_open(req) as response, path.open("xb") as stream:
+            created = True
+            length = int(response.headers.get("Content-Length", "0"))
+            if length < 0 or length > SHARE_LIMIT:
+                raise ValueError("Download exceeds 200 MB")
+            total = 0
+            for chunk in iter(lambda: response.read(1024 * 1024), b""):
+                total += len(chunk)
+                if total > SHARE_LIMIT:
+                    raise ValueError("Download exceeds 200 MB")
+                stream.write(chunk)
+                progress(min(99, int(total * 100 / length)) if length else 0)
+        if sha256_file(path) != match.group(2):
+            raise ValueError("Checksum mismatch: the design package is damaged or has changed")
+        progress(100)
+    except Exception:
+        if created:
+            path.unlink(missing_ok=True)
+        raise
+
+
+def public_tar_metadata(member):
+    # tar.add otherwise publishes the local username, UID/GID, timestamps,
+    # and possible PAX metadata even if the manifest contains no identity.
+    member.uid = member.gid = 0
+    member.uname = member.gname = ""
+    member.mtime = 0
+    member.mode = 0o644
+    member.pax_headers = {}
+    return member
+
+
+def inspect_public_archive(path: Path) -> dict:
+    with tarfile.open(path, "r:gz") as archive:
+        total, count, names, actual = 0, 0, set(), set()
+        manifest = None
+        for member in archive:
+            count += 1
+            total += member.size
+            if count > 50000 or total > EXPANDED_LIMIT:
+                raise ValueError("Archive exceeds the unpacked size/file limit")
+            if member.name in names or not member.isfile():
+                raise ValueError("Design archives must contain unique regular files only")
+            names.add(member.name)
+            if member.name == "manifest.json":
+                if member.size > 4_000_000:
+                    raise ValueError("Manifest too large")
+                manifest = json.load(archive.extractfile(member))
+            elif member.name.startswith("home/") and share_path_allowed(member.name[5:]):
+                actual.add(member.name[5:])
+            else:
+                raise ValueError("Unexpected path in public design archive")
+        if not isinstance(manifest, dict) or manifest.get("public_design") != 1:
+            raise ValueError("Not a supported public design package")
+        paths = manifest.get("paths")
+        if (not isinstance(paths, list) or not paths
+                or not all(isinstance(p, str) and share_path_allowed(p) for p in paths)
+                or len(paths) != len(set(paths)) or set(paths) != actual):
+            raise ValueError("Design manifest does not match the archive contents")
+        if not isinstance(manifest.get("profile"), dict):
+            raise ValueError("Missing compatibility profile")
+        profile = manifest["profile"]
+        if any(not isinstance(profile.get(k), str) or len(profile[k]) > 80 for k in ("plasma", "session")):
+            raise ValueError("Invalid desktop profile")
+        screens = profile.get("screens")
+        if not isinstance(screens, list) or len(screens) > 32:
+            raise ValueError("Invalid screen profile")
+        for screen in screens:
+            if (not isinstance(screen, dict) or set(screen) != {"width", "height", "x", "y", "scale"}
+                    or any(type(value) not in (int, float) or not -100000 < value < 100000
+                           for value in screen.values())
+                    or screen["width"] <= 0 or screen["height"] <= 0 or screen["scale"] <= 0):
+                raise ValueError("Invalid screen profile")
+        requirements = manifest.get("requirements")
+        if not isinstance(requirements, list) or len(requirements) > 1000:
+            raise ValueError("Invalid requirements")
+        for req in requirements:
+            if (not isinstance(req, dict) or req.get("kind") not in
+                    {"asset", "style", "effect", "decoration", "font", "wallpaper"}
+                    or not isinstance(req.get("name"), str) or len(req["name"]) > 512):
+                raise ValueError("Invalid component requirement")
+        return manifest
+
+
+def compatibility_issues(manifest: dict, current: dict, styles: list[str]) -> list[str]:
+    source = manifest["profile"]
+    issues = []
+    for key in ("plasma", "session", "screens"):
+        if not source.get(key) or not current.get(key) or source[key] != current[key]:
+            issues.append(f"{key}: {source.get(key)} → {current.get(key)}")
+    effects = None
+    for req in manifest["requirements"]:
+        kind, name = req["kind"], req["name"]
+        if kind == "asset" and share_path_allowed(".local/share/" + name):
+            if any((root / name).exists() for root in
+                   (HOME / ".local/share", Path("/usr/local/share"), Path("/usr/share"))):
+                continue
+        if kind == "style" and name.lower() in {s.lower() for s in styles}:
+            continue
+        if kind == "effect":
+            if effects is None:
+                effects = ""
+                for command in ("qdbus6", "qdbus", "qdbus-qt6"):
+                    if shutil.which(command):
+                        effects = _run_cmd([command, "org.kde.KWin", "/Effects",
+                                            "org.kde.kwin.Effects.listOfEffects"], 10) or ""
+                        break
+            if name in {line.strip() for line in effects.splitlines()}:
+                continue
+        if kind == "decoration" and _safe_asset_name(name):
+            major = "5" if current.get("plasma", "").startswith("5.") else "6"
+            roots = [Path(p.format(major=major)) for p in ("/usr/lib/qt{major}/plugins", "/usr/lib64/qt{major}/plugins",
+                     "/usr/lib/x86_64-linux-gnu/qt{major}/plugins", "/usr/lib/aarch64-linux-gnu/qt{major}/plugins")]
+            if any((root / folder / (name + ".so")).is_file()
+                   for root in roots for folder in ("org.kde.kdecoration3", "org.kde.kdecoration2")):
+                continue
+        issues.append(kind + ": " + name)
+    return issues
+
+
+def design_install_plan(manifest: dict, current: dict, styles: list[str]):
+    """A deliberately small local package mapping, never an archive command.
+
+    Plasma 5 and unknown native effects require manual setup. Installing a
+    different desktop version/repository is outside the design import.
+    """
+    if any(not current.get(k) or manifest["profile"].get(k) != current[k]
+           for k in ("plasma", "session", "screens")):
+        return None
+    if not current["plasma"].startswith("6.") or not shutil.which("pkexec"):
+        return None
+    missing = any(r["kind"] == "style" and r["name"].lower() in {"kvantum", "kvantum-dark"}
+                  and r["name"].lower() not in {s.lower() for s in styles}
+                  for r in manifest["requirements"])
+    if not missing:
+        return None
+    if shutil.which("pacman"):
+        return ("pacman", "kvantum", ["pacman", "-Si", "kvantum"],
+                ["pacman", "-S", "--needed", "--noconfirm", "kvantum"])
+    if shutil.which("apt-get") and shutil.which("apt-cache"):
+        return ("apt", "qt6-style-kvantum", ["apt-cache", "show", "qt6-style-kvantum"],
+                ["apt-get", "install", "-y", "qt6-style-kvantum"])
+    if shutil.which("dnf"):
+        return ("dnf", "kvantum", ["dnf", "repoquery", "--available", "kvantum"],
+                ["dnf", "install", "-y", "kvantum"])
+    return None
+
+
+def safe_extract(archive: tarfile.TarFile, destination: Path):
+    """Reject escapes, special files and unsafe links on every Python version.
+
+    Write regular files first, links last, so an archive cannot create a link
+    and subsequently write through it. Also used by private backup restores.
+    """
+    links, names, total = [], set(), 0
+    for member in archive:
+        name = member.name.rstrip("/")
+        parts = name.split("/")
+        if (not name or any(p in ("", ".", "..") for p in parts)
+                or "\\" in name or "\x00" in name or name in names):
+            raise ValueError("Unsafe or duplicate archive path")
+        names.add(name)
+        total += member.size
+        if len(names) > 100000 or total > 4_000_000_000:
+            raise ValueError("Archive exceeds extraction limits")
+        target = destination / name
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif member.isfile():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.extractfile(member) as src, target.open("xb") as dst:
+                shutil.copyfileobj(src, dst)
+            target.chmod(member.mode & 0o777)
+        elif member.issym() or member.islnk():
+            links.append((member, target))
+        else:
+            raise ValueError("Unsupported archive member")
+    for member, target in links:
+        if target.exists() or target.is_symlink():
+            raise ValueError("Archive link conflicts with another file")
+        link = member.linkname
+        if os.path.isabs(link) or "\\" in link:
+            raise ValueError("External archive link rejected")
+        resolved = ((target.parent if member.issym() else destination) / link).resolve()
+        if not resolved.is_relative_to(destination.resolve()):
+            raise ValueError("External archive link rejected")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if member.issym():
+            target.symlink_to(link)
+        elif resolved.is_file():
+            shutil.copyfile(resolved, target)
+        else:
+            raise ValueError("Invalid archive hard link")
+
+
+class ShareWorker(QThread):
+    log = pyqtSignal(str)
+    progress = pyqtSignal(int)
+    ready = pyqtSignal(str, object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, screens, code="", dest=None, styles=None):
+        super().__init__()
+        self.screens, self.code, self.dest = screens, code, dest
+        self.styles = styles or []
+
+    def run(self):
+        try:
+            if self.dest is not None:
+                download_design(self.code, self.dest, self.progress.emit)
+                manifest = inspect_public_archive(self.dest)
+                current = desktop_profile(self.screens)
+                issues = compatibility_issues(manifest, current, self.styles)
+                self.ready.emit(str(self.dest), {"manifest": manifest, "issues": issues,
+                                "plan": design_install_plan(manifest, current, self.styles)})
+            else:
+                with tempfile.TemporaryDirectory(prefix="sdd-share-") as tmp:
+                    root = Path(tmp)
+                    manifest = public_design(root, self.screens, self.log.emit)
+                    path = root / "design.sdd"
+                    with tarfile.open(path, "w:gz") as archive:
+                        for rel in manifest["paths"]:
+                            archive.add(root / "home" / rel, arcname="home/" + rel,
+                                        recursive=False, filter=public_tar_metadata)
+                        data = json.dumps(manifest, ensure_ascii=False).encode("utf-8")
+                        info = tarfile.TarInfo("manifest.json")
+                        info.size = len(data)
+                        archive.addfile(info, io.BytesIO(data))
+                    inspect_public_archive(path)
+                    code = upload_design(path, self.progress.emit)
+                    self.ready.emit(code, {"manifest": manifest})
+        except Exception as error:
+            self.failed.emit(f"{type(error).__name__}: {error}")
+
+
+class DesignInstallWorker(ShareWorker):
+    def run(self):
+        try:
+            manifest = inspect_public_archive(self.dest)
+            current = desktop_profile(self.screens)
+            plan = design_install_plan(manifest, current, self.styles)
+            if plan is None:
+                raise ValueError("No supported package installation available")
+            manager, package, query, command = plan
+            if not _run_cmd(query, 60):
+                raise ValueError(f"{package}: not available in the configured {manager} repositories")
+            self.log.emit(f"{manager}: {package}")
+            executable = shutil.which(command[0])
+            if not executable:
+                raise ValueError("Package manager is unavailable")
+            result = subprocess.run([shutil.which("pkexec"), executable, *command[1:]],
+                                    capture_output=True, text=True, timeout=900)
+            if result.returncode:
+                raise ValueError("Package installation failed or was cancelled:\n" + result.stderr[-4000:])
+            # Discover plugins in a fresh process; Qt caches style factories.
+            output = _run_cmd([sys.executable, "-c",
+                              "import json; from PyQt6.QtWidgets import QStyleFactory; print(json.dumps(QStyleFactory.keys()))"], 15)
+            styles = json.loads(output) if output else self.styles
+            issues = compatibility_issues(manifest, desktop_profile(self.screens), styles)
+            self.ready.emit(str(self.dest), {"manifest": manifest, "issues": issues,
+                                            "plan": None, "styles": styles})
+        except Exception as error:
+            self.failed.emit(f"{type(error).__name__}: {error}")
 
 
 # ----------------------------------------------------------------------------
@@ -924,41 +1569,28 @@ class RestoreWorker(QThread):
     failed = pyqtSignal(str)
 
     def __init__(self, archive: str, categories: list[str] | None = None,
-                 rollback: bool = True):
+                 rollback: bool = True, public: bool = False,
+                 screens=None, styles=None):
         super().__init__()
         self.archive = archive
         self.categories = categories   # None = alles aus dem Archiv
         self.rollback = rollback
-
-    @staticmethod
-    def _extract_filter(member, path):
-        """Wie tarfile.data_filter, aber Symlinks aus Icon-/Theme-Paketen
-        (absolute Links) werden erlaubt — es ist das eigene Backup."""
-        try:
-            return tarfile.data_filter(member, path)
-        except (tarfile.AbsoluteLinkError, tarfile.LinkOutsideDestinationError):
-            return member  # Symlink unverändert übernehmen
-        except tarfile.FilterError:
-            return None    # alles andere Verdächtige überspringen
+        self.public = public
+        self.screens = screens or []
+        self.styles = styles or []
 
     def run(self):
         try:
+            if self.public:
+                manifest = inspect_public_archive(Path(self.archive))
+                issues = compatibility_issues(manifest, desktop_profile(self.screens), self.styles)
+                if issues:
+                    raise ValueError(T("share_blocked") + "\n".join(issues))
             with tempfile.TemporaryDirectory(prefix="sdd-restore-") as tmp:
                 tmpp = Path(tmp)
                 self.log.emit(T("log_extracting"))
                 with tarfile.open(self.archive, "r:gz") as tar:
-                    # Sicherheit: keine Pfade außerhalb des Zielordners zulassen
-                    members = []
-                    for m in tar.getmembers():
-                        name = os.path.normpath(m.name)
-                        if name.startswith("..") or os.path.isabs(name):
-                            continue
-                        members.append(m)
-                    try:
-                        tar.extractall(tmpp, members=members,
-                                       filter=self._extract_filter)
-                    except TypeError:  # älteres Python ohne filter-Parameter
-                        tar.extractall(tmpp, members=members)
+                    safe_extract(tar, tmpp)
                 self.progress.emit(30)
 
                 src_home = tmpp / "home"
@@ -977,32 +1609,60 @@ class RestoreWorker(QThread):
                     except (ValueError, OSError):
                         manifest = {}
 
+                if manifest.get("public_design") and not self.public:
+                    raise ValueError("Public designs must be imported through the Share design tab")
+
                 # Aus dem Manifest wissen wir pfadgenau, was zurückkommt —
                 # und können danach filtern. Ohne Manifest (alte Archive)
                 # bleibt es beim bisherigen Verhalten: alles.
-                rel_paths = [str(r) for r in manifest.get("paths", [])]
+                rel_paths = manifest.get("paths")
+                if rel_paths is None:
+                    # Legacy backups have no manifest paths. Limit them to
+                    # the paths this application actually backs up.
+                    rel_paths = [r for values in CATEGORIES.values() for r in values
+                                 if os.path.lexists(src_home / r)]
+                allowed = {r for values in CATEGORIES.values() for r in values}
+                if not isinstance(rel_paths, list) or not all(
+                        isinstance(r, str) and (share_path_allowed(r) if self.public else
+                        (r in allowed or (manifest.get("rollback") and share_path_allowed(r))))
+                        for r in rel_paths):
+                    raise ValueError("Invalid restore paths in manifest")
                 if self.categories is not None and rel_paths:
                     wanted = set()
                     for cat in self.categories:
                         wanted.update(CATEGORIES.get(cat, []))
                     rel_paths = [r for r in rel_paths if r in wanted]
 
+                # No writes through existing directory symlinks in the target
+                # home. Check before creating the rollback, too.
+                for rel in rel_paths:
+                    target = HOME / rel
+                    if self.public and target.is_symlink() and os.path.isabs(os.readlink(target)):
+                        raise ValueError(f"Cannot safely roll back an absolute target symlink: {rel}")
+                    for parent in target.parents:
+                        if parent == HOME:
+                            break
+                        if parent.is_symlink():
+                            raise ValueError(f"Restore path uses a directory symlink: {rel}")
+
+                if self.public:
+                    for rel in rel_paths:
+                        if rel in {".config/" + n for n in VISUAL_CONFIGS}:
+                            config = src_home / rel
+                            if config.stat().st_size > 4_000_000:
+                                raise ValueError("Configuration too large")
+                            config.write_text(config.read_text(encoding="utf-8").replace(
+                                HOME_TOKEN, str(HOME)), encoding="utf-8")
+
                 if src_home.exists():
                     if self.rollback:
                         self.log.emit(T("log_rollback"))
-                        try:
-                            roll = rel_paths or [r for v in CATEGORIES.values()
-                                                 for r in v]
-                            saved = make_rollback(
-                                roll, self.categories
-                                or manifest.get("categories", []))
-                            if saved:
-                                self.log.emit(f"  → {saved}")
-                        except Exception as e:
-                            self.log.emit(f"{T('log_skipped')} rollback ({e})")
+                        saved = make_rollback(rel_paths, self.categories
+                                              or manifest.get("categories", []))
+                        if saved:
+                            self.log.emit(f"  → {saved}")
 
-                    entries = ([src_home / r for r in rel_paths] if rel_paths
-                               else list(src_home.iterdir()))
+                    entries = [src_home / r for r in rel_paths]
                     entries = [e for e in entries if os.path.lexists(e)]
                     total = max(len(entries), 1)
                     for i, entry in enumerate(entries, 1):
@@ -1013,8 +1673,16 @@ class RestoreWorker(QThread):
                 has_packages = False
                 if pkg_dir.exists():
                     dest = HOME / ".savedesktopdesign-packages"
+                    if dest.is_symlink():
+                        raise ValueError("Package directory must not be a symlink")
                     dest.mkdir(exist_ok=True)
                     for f in pkg_dir.iterdir():
+                        if f.name not in {"pacman-explicit.txt", "pacman-foreign.txt",
+                                          "pacman-repos.txt", "apt-manual.txt",
+                                          "dnf-packages.txt", "flatpak.txt"} or not f.is_file() or f.is_symlink():
+                            raise ValueError("Unexpected package list")
+                        if (dest / f.name).is_symlink():
+                            (dest / f.name).unlink()
                         shutil.copy2(f, dest / f.name)
                     has_packages = True
                     self.log.emit(T("log_pkglists_saved") + str(dest))
@@ -1091,7 +1759,7 @@ class RestoreWorker(QThread):
                     self._remove_existing(dst)
                 shutil.copy2(src, dst)
         except OSError as e:
-            self.log.emit(f"{T('log_skipped')} {dst} ({e})")
+            raise OSError(f"Could not restore {dst}: {e}") from e
 
 
 # ----------------------------------------------------------------------------
@@ -1153,6 +1821,10 @@ class MainWindow(QMainWindow):
         self.restore_worker = None
         self.update_worker = None
         self.silent_worker = None
+        self.share_worker = None
+        self.share_temp = None
+        self._public_restore = False
+        self._last_share_code = self.settings.value("last_share_code", "", type=str)
         self._latest_tag = ""        # zuletzt von GitHub gemeldeter Tag
         self._build_ui()
         if self.settings.value("check_updates_on_start", True, type=bool):
@@ -1163,7 +1835,7 @@ class MainWindow(QMainWindow):
     def _worker_running(self) -> bool:
         return any(w is not None and w.isRunning()
                    for w in (self.backup_worker, self.restore_worker,
-                             self.update_worker))
+                             self.update_worker, self.share_worker))
 
     def _set_busy(self, busy: bool):
         """Während eines Jobs Buttons und Sprachwahl sperren: ein zweiter
@@ -1174,6 +1846,10 @@ class MainWindow(QMainWindow):
         self.rollback_btn.setEnabled(not busy)
         self.update_btn.setEnabled(not busy)
         self.lang_combo.setEnabled(not busy)
+        self.share_export_btn.setEnabled(not busy)
+        self.share_import_btn.setEnabled(not busy)
+        self.pkg_btn.setEnabled(not busy)
+        self.plasma_btn.setEnabled(not busy)
 
     def closeEvent(self, event):
         if self._worker_running():
@@ -1184,6 +1860,8 @@ class MainWindow(QMainWindow):
         # zerstört werden — ihr Timeout begrenzt die Wartezeit auf 8 s.
         if self.silent_worker is not None and self.silent_worker.isRunning():
             self.silent_worker.wait()
+        if self.share_temp is not None:
+            self.share_temp.cleanup()
         event.accept()
 
     # ---------------- UI-Aufbau (bei Sprachwechsel neu) ----------------
@@ -1221,6 +1899,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self._build_backup_tab(), QIcon.fromTheme("document-save"), T("tab_backup"))
         tabs.addTab(self._build_restore_tab(), QIcon.fromTheme("document-open"), T("tab_restore"))
+        tabs.addTab(self._build_share_tab(), QIcon.fromTheme("document-send"), T("tab_share"))
         root_lay.addWidget(tabs)
         self.setCentralWidget(root)
 
@@ -1231,6 +1910,128 @@ class MainWindow(QMainWindow):
             _current_lang = code
             self.settings.setValue("language", code)
             self._build_ui()
+
+    def _build_share_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        title = QLabel(T("share_title"))
+        layout.addWidget(title)
+        hint = QLabel(T("share_hint"))
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.share_export_btn = QPushButton(T("share_export"))
+        self.share_export_btn.clicked.connect(self.export_code)
+        layout.addWidget(self.share_export_btn)
+        layout.addWidget(QLabel(T("share_last_code")))
+        self.share_code = QLineEdit()
+        self.share_code.setReadOnly(True)
+        self.share_code.setAccessibleName(T("share_code"))
+        self.share_code.setText(getattr(self, "_last_share_code", ""))
+        layout.addWidget(self.share_code)
+        copy = QPushButton(T("share_copy"))
+        copy.setEnabled(bool(self.share_code.text()))
+        self.share_code.textChanged.connect(lambda value: copy.setEnabled(bool(value)))
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(self.share_code.text()))
+        layout.addWidget(copy)
+        self.share_import_btn = QPushButton(T("share_import"))
+        self.share_import_btn.clicked.connect(self.import_code)
+        layout.addWidget(self.share_import_btn)
+        self.share_progress = QProgressBar()
+        layout.addWidget(self.share_progress)
+        self.share_log = QTextEdit()
+        self.share_log.setReadOnly(True)
+        layout.addWidget(self.share_log)
+        return widget
+
+    def export_code(self):
+        if self._worker_running():
+            return
+        if QMessageBox.question(self, APP_NAME, T("share_consent"),
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        self._start_share(ShareWorker(screen_profile()), "share_upload")
+
+    def import_code(self):
+        if self._worker_running():
+            return
+        code, ok = QInputDialog.getText(self, T("share_import"), T("share_code"))
+        if not ok or not code.strip():
+            return
+        if not CODE_RE.fullmatch(code.strip()):
+            self._share_failed("Invalid SDD1 code / Ungültiger SDD1-Code")
+            return
+        self._clean_share_temp()
+        self.share_temp = tempfile.TemporaryDirectory(prefix="sdd-download-")
+        dest = Path(self.share_temp.name) / "design.sdd"
+        self._start_share(ShareWorker(screen_profile(), code.strip(), dest,
+                                      QStyleFactory.keys()), "share_download")
+
+    def _start_share(self, worker, message):
+        self._set_busy(True)
+        self.share_progress.setValue(0)
+        self.share_log.clear()
+        self.share_log.append(T(message))
+        self.share_worker = worker
+        worker.log.connect(self.share_log.append)
+        worker.progress.connect(self.share_progress.setValue)
+        # Wait for QThread.finished before enabling controls/replacing the
+        # worker reference. queued ready/failed signals store the outcome.
+        self._share_outcome = None
+        worker.ready.connect(lambda value, details: setattr(self, "_share_outcome", (value, details)))
+        worker.failed.connect(lambda error: setattr(self, "_share_outcome", (None, error)))
+        worker.finished.connect(self._share_finished)
+        worker.start()
+
+    def _share_finished(self):
+        self._set_busy(False)
+        value, details = self._share_outcome or (None, "No transfer result")
+        if value is None:
+            self._share_failed(details)
+            return
+        manifest = details["manifest"]
+        self.share_log.append(f"{T('share_details')}: {len(manifest['paths'])} files")
+        self.share_log.append(f"{T('share_omitted')}: {manifest.get('omitted_settings', 0)} settings")
+        if value.startswith("SDD1:"):
+            self._last_share_code = value
+            self.settings.setValue("last_share_code", value)
+            self.share_code.setText(value)
+            self.share_log.append(T("share_ready"))
+            self.share_progress.setValue(100)
+            return
+        if details["issues"]:
+            message = T("share_blocked") + "\n".join(details["issues"])
+            self.share_log.append(message)
+            if details.get("plan"):
+                question = (message + "\n\n" + T("share_install")
+                            + "\n" + details["plan"][1])
+                if QMessageBox.question(self, APP_NAME, question,
+                                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                        QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                    self._start_share(DesignInstallWorker(screen_profile(), dest=Path(value),
+                                                          styles=QStyleFactory.keys()), "share_installing")
+                    return
+            QMessageBox.warning(self, APP_NAME, message)
+            self._clean_share_temp()
+            return
+        review = T("share_review") + "\n\n" + T("share_apply")
+        if QMessageBox.question(self, APP_NAME, review,
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            self._clean_share_temp()
+            return
+        self._start_restore(value, None, True, public=True, styles=details.get("styles"))
+
+    def _clean_share_temp(self):
+        if self.share_temp is not None:
+            self.share_temp.cleanup()
+            self.share_temp = None
+
+    def _share_failed(self, error):
+        self._set_busy(False)
+        self.share_log.append(str(error))
+        self._clean_share_temp()
+        QMessageBox.warning(self, T("share_error"), str(error))
 
     # ---------------- Backup-Tab ----------------
     def _build_backup_tab(self) -> QWidget:
@@ -1388,15 +2189,20 @@ class MainWindow(QMainWindow):
             return
         self._start_restore(archive, chosen, dlg.rollback_cb.isChecked())
 
-    def _start_restore(self, archive: str, categories, rollback: bool):
+    def _start_restore(self, archive: str, categories, rollback: bool, public: bool = False, styles=None):
         self._set_busy(True)
         self.restore_progress.setValue(0)
         self.restore_log.clear()
-        self.restore_worker = RestoreWorker(archive, categories, rollback)
+        self._public_restore = public
+        self.restore_worker = RestoreWorker(archive, categories, rollback, public,
+                                            screen_profile(), styles if styles is not None else QStyleFactory.keys())
         self.restore_worker.log.connect(self.restore_log.append)
         self.restore_worker.progress.connect(self.restore_progress.setValue)
         self.restore_worker.finished_ok.connect(self._restore_done)
         self.restore_worker.failed.connect(self._restore_fail)
+        if public:
+            self.restore_worker.log.connect(self.share_log.append)
+            self.restore_worker.progress.connect(self.share_progress.setValue)
         self.restore_worker.start()
 
     def restore_rollback(self):
@@ -1423,6 +2229,11 @@ class MainWindow(QMainWindow):
         self.plasma_btn.setEnabled(True)
         # pkg_btn bleibt grundsätzlich aktiv (siehe _build_restore_tab) — nie deaktivieren
         self.restore_log.append(T("log_restored"))
+        if self._public_restore:
+            self.share_log.append(T("share_complete"))
+            self._clean_share_temp()
+            QMessageBox.information(self, APP_NAME, T("share_complete"))
+            return
         QMessageBox.information(
             self, APP_NAME,
             T("msg_restored_pkg") if has_packages else T("msg_restored"))
@@ -1430,6 +2241,9 @@ class MainWindow(QMainWindow):
     def _restore_fail(self, err: str):
         self._set_busy(False)
         self.restore_log.append(T("err_prefix") + err)
+        if self._public_restore:
+            self.share_log.append(err)
+            self._clean_share_temp()
         QMessageBox.critical(self, APP_NAME, T("msg_restore_failed"))
 
     def _has_pkg_lists(self) -> bool:

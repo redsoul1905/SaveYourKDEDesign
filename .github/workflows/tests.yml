@@ -1,0 +1,50 @@
+name: Tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.12', '3.13']
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install PyQt6
+      - run: python -m py_compile savedesktopdesign.py
+      - run: python -m unittest discover -s tests -v
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: offline-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify release version
+        run: |
+          python3 - <<'PY'
+          import ast
+          import os
+          from pathlib import Path
+          tree = ast.parse(Path("savedesktopdesign.py").read_text())
+          versions = [node.value.value for node in tree.body
+                      if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == "VERSION"
+                              for target in node.targets)]
+          assert versions == [os.environ["GITHUB_REF_NAME"].removeprefix("v")], versions
+          PY
+      - name: Publish tested version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" savedesktopdesign.py
+          --verify-tag --title "SaveDesktopDesign $GITHUB_REF_NAME"
+          --notes-file RELEASE_NOTES.md --latest

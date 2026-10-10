@@ -1,6 +1,6 @@
 # SaveDesktopDesign
 
-**Current version: 1.5.0** · [Changelog](#changelog)
+**Current version: 1.6.0** · [Changelog](#changelog)
 
 Backs up your **entire KDE Plasma design from A to Z into a single file** — and restores it on a new machine with one click.
 
@@ -62,6 +62,64 @@ python3 savedesktopdesign.py
 
 ## Usage
 
+### Share a design with a code (new in 1.6)
+
+1. Open **Share design → Create export code** (Deutsch: **Design teilen → Export-Code erstellen**).
+2. Review the public-upload notice. After confirmation the app builds a separate
+   visual design package and uploads it to **Catbox**, without an account.
+3. Click **Copy code** and share the complete `SDD1:…` code on Reddit or with friends.
+   The last successful code is remembered across app restarts.
+4. On another PC, open **Share design → Import code** and paste the code. The app
+   downloads the package automatically, verifies its SHA-256 checksum and archive
+   paths, and checks the target desktop before offering to apply it.
+5. If needed, the app can install the **Kvantum Qt 6 engine** from the target's
+   configured repositories (`kvantum` on Arch/Fedora, `qt6-style-kvantum` on
+   Debian/Ubuntu). Installation requires administrator authentication via `pkexec`.
+   Other missing native extensions are reported and must be installed separately.
+6. Confirm the trusted design, then log out and back in after import. Existing
+   files are backed up using the application's rollback feature first.
+
+**Public sharing is not a full private backup.** It exports an allowlist of visual
+settings and the selected themes, icons, cursor themes, wallpapers, fonts, widgets
+and available KWin scripts/effects. System-wide selected theme assets are copied
+into user-level locations for portability. The export excludes the full package
+list, hostname, username, archive ownership metadata, autostart configuration,
+arbitrary widget commands, notes and unknown settings. The number of omitted
+settings is shown. Selected theme/widget assets and wallpapers can themselves
+contain personal material; review them before publishing. Only redistribute
+assets whose licenses allow it. Use the existing **Back up** tab for private backups.
+
+**Compatibility is conservative, not a promise of pixel-identical rendering.**
+Public import currently requires the same full Plasma version, session type
+(Wayland/X11), and reported screen geometry/scaling. Native styles, decorations
+and enabled effects must be available. Differences stop import before design
+settings are written. Matching these checks does **not** prove identical rendering:
+Qt/plugin versions, GPU drivers, color management, custom widget settings and
+other unexported configuration can still differ. The exporter does not silently
+upgrade Plasma, add repositories, build AUR packages, or run commands from a
+downloaded manifest. A universal one-click Arch-to-any-Kubuntu clone is not
+implemented. Standard private-backup package lists still target the same distro family.
+
+**Catbox limits:** maximum 200 MB per package; no splitting to bypass the limit.
+Codes can be reused while the file is hosted; the exporting PC can be offline.
+The provider currently says anonymous uploads expire after two years without
+access. Availability is not guaranteed and some networks block Catbox. Catbox
+itself is not open source. Keep a local backup. See the
+[Catbox API](https://catbox.moe/tools.php), [FAQ](https://catbox.moe/faq.php) and
+[terms](https://catbox.moe/legal.php); commercial use needs their prior approval.
+
+**Trust:** the checksum detects changes to a downloaded file; it does not certify
+its author or make it safe. KDE themes, widgets and scripts can execute code when
+loaded. Only apply designs from trusted authors. Public archives cannot contain
+symlinks, device files, arbitrary home paths or private package-install scripts.
+Downloads and decompressed archives have size and file-count limits. Rollback
+restores overwritten files, not newly added assets or installed packages.
+
+The new sharing interface is available in German and English; other app languages
+use English for the new sharing messages.
+
+### Private backup and restore
+
 **Back up (old machine):**
 1. Launch the app → **Back up** tab
 2. Select categories (default: everything) → **Create backup**
@@ -119,6 +177,23 @@ rm -rf ~/Savedesktopdesign && git clone https://github.com/redsoul1905/Savedeskt
 
 ## Changelog
 
+### v1.6.0
+
+- Catbox upload and import in a new **Share design** tab, without a Catbox account.
+- Reusable, copyable `SDD1` codes containing the file ID and full SHA-256 digest.
+- Separate public visual-export format with selected user/system theme assets,
+  bundled wallpapers/fonts, reduced settings, and anonymous tar metadata.
+- Strict archive validation, fixed Catbox endpoints, rejected redirects, bounded
+  downloads/extraction, and checksum verification before importing.
+- Plasma/session/screen compatibility checks and missing-native-component reporting;
+  locally defined Kvantum package mapping for Arch, Debian/Ubuntu and Fedora.
+- Private restore extraction also rejects unsafe links and paths. Restores stop
+  on rollback/copy failures instead of reporting success after skipped writes.
+  Legacy archives containing absolute or external symlinks now fail explicitly;
+  they are no longer restored with the old permissive extraction behavior.
+- Automated offline security, transfer, GUI and backup/rollback tests; an optional
+  live Catbox probe uses only a tiny synthetic fixture.
+
 ### v1.5.0
 
 - **A safety net under every restore.** Before anything is overwritten, the current state of exactly those paths is saved to `~/.savedesktopdesign-rollback.tar.gz`, and **Roll back to the state before the last restore** puts it back. Can be switched off per restore. It restores what was overwritten; files the restore added are not removed.
@@ -168,3 +243,25 @@ Bug-fix release — every issue below was reproduced before it was fixed.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Development checks
+
+With Python 3.10+ and PyQt6 installed:
+
+```bash
+QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -v
+python3 -m py_compile savedesktopdesign.py
+```
+
+An opt-in integration check publishes a tiny **synthetic** package to Catbox and
+downloads it by its generated code. It never reads or changes your desktop. The
+anonymous test upload may remain on Catbox, so this is not run by CI:
+
+```bash
+python3 tests/live_catbox_probe.py --upload-synthetic-fixture
+```
+
+GitHub Actions runs the offline suite on Python 3.10, 3.12 and 3.13. Pushing a
+version tag such as `v1.6.0` publishes a GitHub release only after all three test
+jobs pass and the tag matches `VERSION`. Release text comes from
+`RELEASE_NOTES.md`; `savedesktopdesign.py` is attached as a downloadable asset.
