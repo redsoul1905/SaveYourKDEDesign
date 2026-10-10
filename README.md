@@ -2,6 +2,50 @@
 
 **Current version: 1.6.0** · [Changelog](#changelog)
 
+**Development branch: 1.7.0-dev — cross-distribution KDE setup.** Not yet a
+released update; real guest-system installation tests are still required.
+
+### KDE setup during import (development)
+
+The import preflight can offer to install a missing KDE desktop on Ubuntu,
+regular Fedora, and Arch/Arch-derived systems, after explicit confirmation and
+administrator authentication. The repository candidate for Plasma must match
+the exported upstream Plasma version. Ubuntu uses `kde-plasma-desktop` without
+recommended packages, plus the separate Wayland session when available and
+needed; Fedora uses `@kde-desktop-environment`; Arch uses `plasma-meta`. Existing
+desktop environments are not removed and the login manager is not explicitly
+switched. Repository metadata may need refreshing through the system updater.
+
+When an existing Plasma installation needs an available matching update, the
+app recommends the system updater; it does not perform distribution upgrades,
+add repositories, or downgrade Plasma. Fedora Atomic/Silverblue/Kinoite is
+detected and excluded from this package-install path. Unknown distributions
+receive guidance rather than a guessed installation command.
+
+After KDE installation, log out, select Plasma and import the same code again.
+The last import code is remembered. No design settings are applied from a GNOME
+session, even if KDE packages are already installed. Package installations are
+not covered by the design-file rollback. A failed transaction can have partially
+installed packages; use the system package manager to inspect/recover it.
+
+The import review lists bundled widgets, wallpaper plugins and KWin scripts/
+effects with JSON metadata, comparing local and bundled versions. Declared
+Plasma minimum versions block incompatible imports, including at the final
+restore check. The bundled version replaces the local version, even if older;
+this preserves the export rather than silently selecting a different latest
+version. Legacy metadata, undeclared QML/native dependencies and runtime API
+compatibility are not fully resolved. Native extension auto-installation remains
+limited to the existing Kvantum mapping; other native requirements still block.
+Exact Plasma/session/screen checks still apply. This is not yet a universal
+one-click clone across arbitrary KDE releases or screen layouts.
+
+Validation: offline mocked Ubuntu/Fedora/Arch repositories and administrator
+transactions, minimum-version checks, cancellation and active-session checks.
+No real operating system packages are installed by the tests. Full Ubuntu and
+Fedora VM installation/relogin/restore verification is pending before release.
+Package choices follow the [Ubuntu package catalog](https://packages.ubuntu.com/kde-plasma-desktop)
+and [Fedora KDE instructions](https://fedoraproject.org/wiki/KDE).
+
 Backs up your **entire KDE Plasma design from A to Z into a single file** — and restores it on a new machine with one click.
 
 Works on **Arch-based systems (CachyOS, EndeavourOS …), Ubuntu/Debian and Fedora** — anywhere KDE Plasma runs.

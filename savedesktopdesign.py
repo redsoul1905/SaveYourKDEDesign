@@ -15,6 +15,7 @@ import io
 import hashlib
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -42,7 +43,7 @@ from PyQt6.QtWidgets import (
 
 HOME = Path.home()
 APP_NAME = "SaveDesktopDesign"
-VERSION = "1.6.0"
+VERSION = "1.7.0-dev"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/Savedesktopdesign"
@@ -608,6 +609,10 @@ TRANSLATIONS["en"].update({
     "share_details": "Package contents", "share_omitted": "Not exported",
     "share_install": "Install the missing Kvantum theme engine using this system's package manager? Administrator authentication is required. Only the locally defined package is installed; no commands from the design package are run. Remaining compatibility differences will be checked again afterwards.",
     "share_installing": "Installing the missing theme engine …",
+    "share_desktop_install": "Install the KDE desktop system-wide now? This can download many packages and take a long time. Administrator authentication is required. Your existing desktop is retained. No distribution upgrade is performed.",
+    "share_desktop_working": "Installing KDE. Do not shut down or interrupt the package manager …",
+    "share_desktop_done": "KDE packages installed. No design settings have been applied yet. Log out, select Plasma at the login screen, then import the same code again. Your last import code is saved in the input field. Remaining version, session and screen differences will be checked again.",
+    "share_extensions": "Bundled extensions will replace local copies with the exported version (including older versions). Declared minimum Plasma versions are checked; undeclared dependencies and runtime compatibility cannot be verified automatically.",
 })
 TRANSLATIONS["de"].update({
     "tab_share": "Design teilen", "share_export": "Export-Code erstellen …",
@@ -627,6 +632,10 @@ TRANSLATIONS["de"].update({
     "share_details": "Paketinhalt", "share_omitted": "Nicht exportiert",
     "share_install": "Fehlende Kvantum-Theme-Engine mit der Paketverwaltung dieses Systems installieren? Dafür ist eine Administrator-Anmeldung nötig. Installiert wird nur das im Programm festgelegte Paket; keine Befehle aus dem Design-Paket. Anschließend werden verbleibende Kompatibilitätsunterschiede erneut geprüft.",
     "share_installing": "Fehlende Theme-Engine wird installiert …",
+    "share_desktop_install": "KDE jetzt systemweit zusätzlich installieren? Dies kann viele Pakete herunterladen und lange dauern. Administrator-Anmeldung erforderlich. Die vorhandene Oberfläche bleibt erhalten. Kein Distributions-Upgrade.",
+    "share_desktop_working": "KDE wird installiert. Nicht herunterfahren oder die Paketverwaltung unterbrechen …",
+    "share_desktop_done": "KDE-Pakete installiert. Noch keine Design-Einstellungen übernommen. Bitte abmelden, am Anmeldebildschirm Plasma auswählen und denselben Code erneut importieren. Der letzte Import-Code ist im Eingabefeld gespeichert. Version, Sitzung und Bildschirmunterschiede werden erneut geprüft.",
+    "share_extensions": "Mitgelieferte Erweiterungen ersetzen lokale Kopien durch die exportierte Version (auch ältere Versionen). Angegebene Plasma-Mindestversionen werden geprüft; nicht angegebene Abhängigkeiten und die Laufzeit-Kompatibilität lassen sich nicht automatisch bestätigen.",
 })
 
 
@@ -734,7 +743,8 @@ CATEGORIES: dict[str, list[str]] = {
 
 def _run_cmd(cmd: list[str], timeout: int = 120) -> str | None:
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                             env={**os.environ, "LC_ALL": "C"})
         return out.stdout if out.returncode == 0 else None
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -910,6 +920,7 @@ def desktop_profile(screens: list[dict]) -> dict:
     out = _run_cmd(["plasmashell", "--version"], 10) or ""
     version = re.search(r"\b(\d+\.\d+(?:\.\d+)?)\b", out)
     return {"plasma": version.group(1) if version else "",
+            "desktop": "KDE" if "kde" in os.environ.get("XDG_CURRENT_DESKTOP", "").lower().split(":") else "",
             "session": os.environ.get("XDG_SESSION_TYPE", ""),
             "screens": screens}
 
@@ -1105,6 +1116,8 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None) ->
     profile = desktop_profile(screens)
     if not profile.get("plasma") or not profile.get("session") or not profile.get("screens"):
         raise ValueError("Cannot determine the KDE version, session or screen layout; export from your KDE desktop session")
+    if "desktop" in profile and profile["desktop"] != "KDE":
+        raise ValueError("Export from a KDE Plasma session / Bitte aus einer KDE-Plasma-Sitzung exportieren")
     return {"app": APP_NAME, "version": VERSION, "public_design": 1,
             "created": datetime.now().isoformat(timespec="seconds"),
             "profile": profile, "paths": sorted(set(paths)),
@@ -1256,6 +1269,8 @@ def inspect_public_archive(path: Path) -> dict:
 def compatibility_issues(manifest: dict, current: dict, styles: list[str]) -> list[str]:
     source = manifest["profile"]
     issues = []
+    if "desktop" in current and "kde" not in current["desktop"].lower().split(":"):
+        issues.append("Please log into a KDE Plasma session / Bitte in KDE Plasma anmelden")
     for key in ("plasma", "session", "screens"):
         if not source.get(key) or not current.get(key) or source[key] != current[key]:
             issues.append(f"{key}: {source.get(key)} → {current.get(key)}")
@@ -1287,6 +1302,126 @@ def compatibility_issues(manifest: dict, current: dict, styles: list[str]) -> li
                 continue
         issues.append(kind + ": " + name)
     return issues
+
+
+def plasma_version(value: str):
+    """Compare upstream versions, ignoring a distro's epoch/release suffix."""
+    match = re.match(r"^(?:\d+:)?(\d+)\.(\d+)(?:\.(\d+))?(?:[-+~.]|$)", value)
+    return tuple(int(v or 0) for v in match.groups()) if match else None
+
+
+def desktop_setup(manifest: dict, current: dict) -> dict:
+    """Read-only repository preflight. Commands are local constants, never payload data.
+
+    Only missing desktops are installed here. Upgrades remain suggestions so a
+    theme import cannot silently upgrade a whole distribution or downgrade KDE.
+    """
+    result = {"notes": [], "command": None}
+    if current.get("plasma") == manifest["profile"].get("plasma"):
+        return result
+    de = _current_lang == "de"
+    def note(german, english):
+        result["notes"].append(german if de else english)
+    try:
+        release = platform.freedesktop_os_release()
+        distro = release.get("ID", "")
+        if "arch" in release.get("ID_LIKE", "").split():
+            distro = "arch"
+    except OSError:
+        distro = ""
+    if Path("/run/ostree-booted").exists():
+        note("Fedora Atomic: KDE benötigt einen eigenen Umstellungsweg (Kinoite). Keine automatische Systemumstellung.",
+             "Fedora Atomic: KDE needs a separate migration to Kinoite. No automatic system rebase.")
+        return result
+    candidate, command = "", None
+    if distro == "ubuntu" and shutil.which("apt-cache") and shutil.which("apt-get"):
+        output = _run_cmd(["apt-cache", "policy", "plasma-workspace"], 30) or ""
+        match = re.search(r"^\s*Candidate:\s*(\S+)", output, re.M)
+        candidate = match.group(1) if match else ""
+        # Minimal KDE metapackage; keep the existing desktop and login manager.
+        command = ["apt-get", "install", "--no-remove", "--no-install-recommends", "-y", "kde-plasma-desktop"]
+        if not _run_cmd(["apt-cache", "show", "kde-plasma-desktop"], 30):
+            command = None
+        # Plasma 5 distributions split the Wayland session into this package.
+        if manifest["profile"].get("session") == "wayland" and _run_cmd(
+                ["apt-cache", "show", "plasma-workspace-wayland"], 30):
+            if command:
+                command.append("plasma-workspace-wayland")
+    elif distro == "fedora" and shutil.which("dnf"):
+        output = _run_cmd(["dnf", "repoquery", "--available", "--latest-limit=1",
+                           "--qf", "%{version}", "plasma-workspace"], 60) or ""
+        versions = [s.strip() for s in output.splitlines() if plasma_version(s.strip())]
+        candidate = max(versions, key=plasma_version) if versions else ""
+        command = ["dnf", "install", "-y", "@kde-desktop-environment"]
+    elif distro == "arch" and shutil.which("pacman"):
+        output = _run_cmd(["pacman", "-Si", "plasma-workspace"], 30) or ""
+        match = re.search(r"^Version\s*:\s*(\S+)", output, re.M)
+        candidate = match.group(1) if match else ""
+        command = ["pacman", "-S", "--needed", "--noconfirm", "plasma-meta"]
+    else:
+        note("Für dieses System ist keine automatische KDE-Installation hinterlegt.",
+             "Automatic KDE installation is not configured for this system.")
+        return result
+    needed = manifest["profile"].get("plasma", "")
+    result.update(candidate=candidate, distro=distro)
+    note(f"Plasma: installiert {current.get('plasma') or 'nicht vorhanden'}; benötigt {needed}; Paketquellen {candidate or 'unbekannt'}.",
+         f"Plasma: installed {current.get('plasma') or 'missing'}; required {needed}; repositories {candidate or 'unknown'}.")
+    note("Paketquellen können veraltet sein. Bei Bedarf über die Systemaktualisierung auffrischen und erneut prüfen.",
+         "Repository metadata may be stale. Refresh it through the system updater if needed and check again.")
+    if not plasma_version(candidate) or plasma_version(candidate) != plasma_version(needed):
+        note("Die benötigte Plasma-Version ist nicht als Paketkandidat verfügbar. Keine fremden Quellen, kein Downgrade und kein automatisches Distributions-Upgrade. Prüfe einen passenden Distributionsstand.",
+             "The required Plasma version is not the repository candidate. No third-party repositories, downgrade or automatic distribution upgrade. Check for a suitable distribution release.")
+    elif current.get("plasma"):
+        installed = plasma_version(current["plasma"])
+        if installed and installed < plasma_version(candidate):
+            note("Passendes Plasma-Update verfügbar: zuerst mit der Systemaktualisierung installieren, neu anmelden und den Code erneut importieren.",
+                 "A matching Plasma update is available: install it through the system updater, log in again, then import the code again.")
+        else:
+            note("Kein automatischer Plasma-Downgrade. Eine passende KDE-Umgebung ist erforderlich.",
+                 "No automatic Plasma downgrade. A matching KDE environment is required.")
+    elif command and shutil.which("pkexec"):
+        result["command"] = command
+        note("KDE zusätzlich installieren; vorhandene Oberfläche bleibt erhalten. Danach abmelden, Plasma auswählen und denselben Code erneut importieren. Systempakete sind nicht Teil des Design-Rollbacks.",
+             "Install KDE alongside the existing desktop. Afterwards log out, select Plasma and import the same code again. System packages are not covered by design rollback.")
+    else:
+        note("KDE-Installation nicht verfügbar: Paket oder Administrator-Authentifizierung fehlt.",
+             "KDE installation unavailable: package or administrator authentication missing.")
+    return result
+
+
+def extension_preflight(path: Path, current: dict):
+    """Inspect the bundled versions, without executing scripts or trusting URLs."""
+    rows, issues = [], []
+    prefixes = ("plasma/plasmoids", "plasma/wallpapers", "kwin/scripts", "kwin/effects")
+    with tarfile.open(path, "r:gz") as archive:
+        for member in archive:
+            rel = member.name.removeprefix("home/.local/share/")
+            base = next((p for p in prefixes if rel.startswith(p + "/")), None)
+            if not base or not rel.endswith("/metadata.json") or rel.count("/") != base.count("/") + 2:
+                continue
+            if member.size > 256000 or not member.isfile():
+                raise ValueError("Invalid extension metadata")
+            data = json.load(archive.extractfile(member))
+            if not isinstance(data, dict) or not isinstance(data.get("KPlugin", {}), dict):
+                raise ValueError("Invalid extension metadata")
+            name = rel[len(base) + 1:].split("/")[0]
+            version = str(data.get("KPlugin", {}).get("Version", "unknown"))[:80]
+            minimum = str(data.get("X-Plasma-API-Minimum-Version", ""))
+            local_version = "not installed / nicht installiert"
+            for root in (HOME / ".local/share", Path("/usr/local/share"), Path("/usr/share")):
+                local = root / rel
+                if local.is_file():
+                    try:
+                        if local.stat().st_size <= 256000:
+                            local_version = str(json.loads(local.read_text()).get("KPlugin", {}).get("Version", "unknown"))[:80]
+                    except (ValueError, OSError, AttributeError):
+                        local_version = "unknown"
+                    break
+            rows.append(f"{base}/{name}: {local_version} → {version} (bundled / mitgeliefert)")
+            if minimum and (not plasma_version(minimum) or not plasma_version(current.get("plasma", ""))
+                            or plasma_version(current["plasma"]) < plasma_version(minimum)):
+                issues.append(f"{name}: Plasma minimum / mindestens {minimum[:80]}")
+    return rows, issues
 
 
 def design_install_plan(manifest: dict, current: dict, styles: list[str]):
@@ -1382,7 +1517,10 @@ class ShareWorker(QThread):
                 manifest = inspect_public_archive(self.dest)
                 current = desktop_profile(self.screens)
                 issues = compatibility_issues(manifest, current, self.styles)
+                extensions, extension_issues = extension_preflight(self.dest, current)
+                issues.extend(extension_issues)
                 self.ready.emit(str(self.dest), {"manifest": manifest, "issues": issues,
+                                "setup": desktop_setup(manifest, current), "extensions": extensions,
                                 "plan": design_install_plan(manifest, current, self.styles)})
             else:
                 with tempfile.TemporaryDirectory(prefix="sdd-share-") as tmp:
@@ -1400,6 +1538,41 @@ class ShareWorker(QThread):
                     inspect_public_archive(path)
                     code = upload_design(path, self.progress.emit)
                     self.ready.emit(code, {"manifest": manifest})
+        except Exception as error:
+            self.failed.emit(f"{type(error).__name__}: {error}")
+
+
+class DesktopSetupWorker(ShareWorker):
+    def __init__(self, screens, dest, approved):
+        super().__init__(screens, dest=dest)
+        self.approved = approved
+
+    def run(self):
+        try:
+            manifest = inspect_public_archive(self.dest)
+            # Recompute after consent; repository changes require a new review.
+            plan = desktop_setup(manifest, desktop_profile(self.screens))
+            if not plan.get("command") or plan != self.approved:
+                raise ValueError("Installation plan changed. Import the code again / Installationsplan geändert: Code erneut importieren.")
+            command = plan["command"]
+            executable = shutil.which(command[0])
+            auth = shutil.which("pkexec")
+            if not executable or not auth:
+                raise ValueError("Package manager or administrator authentication unavailable")
+            # Ubuntu debconf must not wait for an invisible terminal. Keep the
+            # existing login manager by installing without recommended packages.
+            args = [auth, executable, *command[1:]]
+            if command[0] == "apt-get":
+                args = [auth, "/usr/bin/env", "DEBIAN_FRONTEND=noninteractive", executable, *command[1:]]
+            self.log.emit(shlex.join(command))
+            # Never timeout/kill a package transaction mid-write. Closing the
+            # application is already prohibited while its worker is running.
+            result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+            if result.returncode:
+                raise ValueError("KDE installation failed or was cancelled. System packages may have changed.\n" + result.stderr[-4000:])
+            if not desktop_profile(self.screens).get("plasma"):
+                raise ValueError("Package transaction finished, but Plasma was not detected. Check the system package manager.")
+            self.ready.emit(str(self.dest), {"manifest": manifest, "desktop_installed": True})
         except Exception as error:
             self.failed.emit(f"{type(error).__name__}: {error}")
 
@@ -1428,8 +1601,10 @@ class DesignInstallWorker(ShareWorker):
                               "import json; from PyQt6.QtWidgets import QStyleFactory; print(json.dumps(QStyleFactory.keys()))"], 15)
             styles = json.loads(output) if output else self.styles
             issues = compatibility_issues(manifest, desktop_profile(self.screens), styles)
+            extensions, extension_issues = extension_preflight(self.dest, desktop_profile(self.screens))
+            issues.extend(extension_issues)
             self.ready.emit(str(self.dest), {"manifest": manifest, "issues": issues,
-                                            "plan": None, "styles": styles})
+                                            "plan": None, "styles": styles, "extensions": extensions})
         except Exception as error:
             self.failed.emit(f"{type(error).__name__}: {error}")
 
@@ -1584,6 +1759,7 @@ class RestoreWorker(QThread):
             if self.public:
                 manifest = inspect_public_archive(Path(self.archive))
                 issues = compatibility_issues(manifest, desktop_profile(self.screens), self.styles)
+                issues.extend(extension_preflight(Path(self.archive), desktop_profile(self.screens))[1])
                 if issues:
                     raise ValueError(T("share_blocked") + "\n".join(issues))
             with tempfile.TemporaryDirectory(prefix="sdd-restore-") as tmp:
@@ -1955,12 +2131,14 @@ class MainWindow(QMainWindow):
     def import_code(self):
         if self._worker_running():
             return
-        code, ok = QInputDialog.getText(self, T("share_import"), T("share_code"))
+        code, ok = QInputDialog.getText(self, T("share_import"), T("share_code"),
+                                       text=self.settings.value("last_import_code", ""))
         if not ok or not code.strip():
             return
         if not CODE_RE.fullmatch(code.strip()):
             self._share_failed("Invalid SDD1 code / Ungültiger SDD1-Code")
             return
+        self.settings.setValue("last_import_code", code.strip())
         self._clean_share_temp()
         self.share_temp = tempfile.TemporaryDirectory(prefix="sdd-download-")
         dest = Path(self.share_temp.name) / "design.sdd"
@@ -1999,9 +2177,29 @@ class MainWindow(QMainWindow):
             self.share_log.append(T("share_ready"))
             self.share_progress.setValue(100)
             return
+        if details.get("desktop_installed"):
+            message = T("share_desktop_done")
+            self.share_log.append(message)
+            QMessageBox.information(self, APP_NAME, message)
+            self._clean_share_temp()
+            return
+        for row in details.get("extensions", []):
+            self.share_log.append(row)
+        setup = details.get("setup", {})
+        for note in setup.get("notes", []):
+            self.share_log.append(note)
         if details["issues"]:
             message = T("share_blocked") + "\n".join(details["issues"])
+            if setup.get("notes"):
+                message += "\n\n" + "\n".join(setup["notes"])
             self.share_log.append(message)
+            if setup.get("command"):
+                question = message + "\n\n" + T("share_desktop_install") + "\n" + shlex.join(setup["command"])
+                if QMessageBox.question(self, APP_NAME, question,
+                                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                        QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                    self._start_share(DesktopSetupWorker(screen_profile(), Path(value), setup), "share_desktop_working")
+                    return
             if details.get("plan"):
                 question = (message + "\n\n" + T("share_install")
                             + "\n" + details["plan"][1])
@@ -2014,7 +2212,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP_NAME, message)
             self._clean_share_temp()
             return
-        review = T("share_review") + "\n\n" + T("share_apply")
+        review = T("share_review") + "\n\n" + T("share_extensions") + "\n" + "\n".join(details.get("extensions", [])) + "\n\n" + T("share_apply")
         if QMessageBox.question(self, APP_NAME, review,
                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
