@@ -8,18 +8,32 @@ jobs:
   offline-tests:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python: ['3.10', '3.12', '3.13']
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install PyQt6
       - run: python -m py_compile savedesktopdesign.py
-      - run: python -m unittest discover -s tests -v
+      - name: Run offline tests
+        run: |
+          python - <<'PY'
+          import subprocess
+          import sys
+          result = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  text=True, errors="replace")
+          print(result.stdout)
+          if result.returncode:
+              detail = result.stdout[-20000:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print("::error title=Offline tests failed::" + detail)
+          sys.exit(result.returncode)
+          PY
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: offline-tests
@@ -27,7 +41,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify release version
         run: |
           python3 - <<'PY'
