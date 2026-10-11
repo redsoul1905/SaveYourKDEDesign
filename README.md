@@ -10,7 +10,16 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.7.6** · [Changelog](#changelog)
+**Current version: 1.7.7** · [Changelog](#changelog)
+
+**New in 1.7.7:** preserve Panel Colorizer's larger visual settings, panel-view
+geometry and linked system trays during public layout imports. Use Plasma's
+primary-screen numbering instead of Qt's screen enumeration. Private backups
+now embed selected external wallpaper files, and large legacy backups use
+separate extraction limits. Existing archives/codes cannot recover assets or
+settings that were never included: create a new export from the desired desktop.
+Cross-distribution pixel-identical rendering still needs an actual target-session
+check; offline tests do not verify graphics drivers or third-party plugin behavior.
 
 **New in 1.7.6:** public imports now work with safe dotfile-manager links such as
 `~/.config/gtk-3.0` pointing into the same user home, while links outside the
@@ -287,6 +296,20 @@ cd ~/SaveYourKDEDesign && ./install.sh --update
 - Optional: `paru`/`yay` for AUR packages, `flatpak`
 
 ## Changelog
+
+### v1.7.7
+
+- Keep large, validated Panel Colorizer appearance settings while rejecting
+  free-form private text, commands and paths.
+- Remap panel-view IDs together with containment IDs; retain secondary panels
+  and linked system-tray containments.
+- Embed external file wallpapers in new private backups and rebase their paths
+  on restore. An unavailable file wallpaper produces a reconnect-and-retry error.
+- Separate local backup extraction limits (1 million entries / 4 GB unpacked)
+  from public sharing limits. Skip unsafe external links in legacy private
+  archives without following them; report the skipped count.
+- Preserve legacy category selection and safe in-home dotfile-manager links.
+- Add regression coverage for layout fidelity, wallpaper portability and rollback.
 
 ### v1.7.6
 

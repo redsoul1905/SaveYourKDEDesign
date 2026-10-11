@@ -263,6 +263,24 @@ class SharingTests(unittest.TestCase):
             app.safe_extract(archive, dest)
         self.assertFalse((self.home / "escaped").exists())
 
+    def test_private_legacy_restore_can_safely_skip_external_asset_link(self):
+        path = self.root / "legacy.tar.gz"
+        link = tarfile.TarInfo("home/.local/share/icons/Test/external.svg")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/usr/share/icons/external.svg"
+        doc = {"paths": [".local/share/icons"], "categories": ["cat_themes"]}
+        archive_file(path, [(link.name, link),
+                            ("home/.local/share/icons/Test/regular.svg", b"ok")], doc)
+        worker = app.RestoreWorker(str(path), rollback=False)
+        errors, logs = [], []
+        worker.failed.connect(errors.append)
+        worker.log.connect(logs.append)
+        with patch.object(worker, "_post_restore"):
+            worker.run()
+        self.assertEqual(errors, [])
+        self.assertFalse((self.home / ".local/share/icons/Test/external.svg").exists())
+        self.assertTrue(any("1 unsichere" in line for line in logs))
+
     def test_compatibility_blocks_unknown_or_different_environment(self):
         self.assertEqual(app.compatibility_issues(manifest(), PROFILE, []), [])
         for key, value in (("plasma", "5.27.0"), ("session", "x11")):
@@ -342,6 +360,47 @@ class SharingTests(unittest.TestCase):
             restore.run()
         self.assertEqual(errors, [])
         self.assertEqual(original.read_text(), "original")
+
+    def test_private_backup_embeds_external_selected_wallpaper(self):
+        wallpaper = self.root / "outside-home.png"
+        wallpaper.write_bytes(b"exact wallpaper")
+        layout = self.config("plasma-org.kde.plasma.desktop-appletsrc",
+                             "[Containments][1][Wallpaper][org.kde.image][General]\n"
+                             f"Image={wallpaper.as_uri()}\n")
+        path = self.root / "portable-private.tar.gz"
+        backup = app.BackupWorker(str(path), ["cat_plasma"], False)
+        errors = []
+        backup.failed.connect(errors.append)
+        backup.run()
+        self.assertEqual(errors, [])
+        with tarfile.open(path, "r:gz") as archive:
+            names = archive.getnames()
+            embedded = next(n for n in names if n.startswith(
+                "home/.local/share/wallpapers/SaveYourKDEDesign/"))
+            saved_layout = archive.extractfile(
+                "home/.config/plasma-org.kde.plasma.desktop-appletsrc").read().decode()
+            self.assertIn(app.HOME_TOKEN, saved_layout)
+            self.assertEqual(archive.extractfile(embedded).read(), b"exact wallpaper")
+        wallpaper.unlink()
+        layout.write_text("changed")
+        restore = app.RestoreWorker(str(path), rollback=False)
+        restore.failed.connect(errors.append)
+        with patch.object(restore, "_post_restore"):
+            restore.run()
+        self.assertEqual(errors, [])
+        self.assertIn(str(self.home), layout.read_text())
+        restored = next((self.home / ".local/share/wallpapers/SaveYourKDEDesign").iterdir())
+        self.assertEqual(restored.read_bytes(), b"exact wallpaper")
+
+    def test_private_restore_has_separate_large_archive_limit(self):
+        path = self.root / "many.tar.gz"
+        archive_file(path, [("home/a", b"a"), ("home/b", b"b")])
+        destination = self.root / "unpacked"
+        destination.mkdir()
+        with patch.object(app, "SHARE_FILE_LIMIT", 1), \
+                patch.object(app, "RESTORE_FILE_LIMIT", 10), tarfile.open(path) as archive:
+            app.safe_extract(archive, destination)
+        self.assertEqual((destination / "home/a").read_bytes(), b"a")
 
 
 class GuiTests(unittest.TestCase):

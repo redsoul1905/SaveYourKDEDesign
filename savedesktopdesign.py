@@ -47,7 +47,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.7.6"
+VERSION = "1.7.7"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -848,9 +848,12 @@ def make_rollback(rel_paths: list[str], categories: list[str],
     with tarfile.open(tmp, "w:gz") as tar:
         # Public restores may deliberately write through a safe dotfile-manager
         # link. Back up the data behind that link, not merely the link itself.
-        tar.dereference = dereference
+        # Resolve only the restore roots. Nested links are replaced by _merge,
+        # not written through; following them could escape HOME or loop forever.
+        tar.dereference = False
         for rel in present:
-            tar.add(HOME / rel, arcname=f"home/{rel}")
+            source = safe_public_restore_target(rel) if dereference else HOME / rel
+            tar.add(source, arcname=f"home/{rel}")
         data = json.dumps(manifest, indent=2).encode()
         info = tarfile.TarInfo("manifest.json")
         info.size = len(data)
@@ -881,6 +884,8 @@ CATBOX_FILES = "https://files.catbox.moe/"
 SHARE_LIMIT = 200_000_000
 EXPANDED_LIMIT = 1_000_000_000
 SHARE_FILE_LIMIT = 200_000  # Tela-dark plus inherited Breeze has over 108k paths.
+RESTORE_FILE_LIMIT = 1_000_000  # Full local backups can contain hundreds of thousands of icon links.
+RESTORE_EXPANDED_LIMIT = 4_000_000_000
 MANIFEST_LIMIT = 16_000_000
 CODE_RE = re.compile(r"SDD1:([a-zA-Z0-9]{6,16}\.sdd):([0-9a-f]{64})\Z")
 HOME_TOKEN = "@SDD_HOME@"
@@ -902,6 +907,7 @@ ButtonsOnLeft ButtonsOnRight NoPlugin CustomButtonPositions
 plugin wallpaperplugin formfactor location activityId lastScreen screen
 immutability containmentId SystrayContainmentId AppletOrder
 panelVisibility alignment floating lengthMode minLength maxLength thickness
+panelLengthMode panelOpacity
 height width offset maximumLength minimumLength
 iconSize iconSizeRatio taskbarPosition showToolTips
 showDate dateFormat use24hClock showSeconds boldText fontFamily fontSize
@@ -954,11 +960,10 @@ def screen_profile() -> list[dict]:
 
 
 def primary_screen_index() -> int:
-    app = QGuiApplication.instance()
-    if app is None or app.primaryScreen() is None:
-        return 0
-    screens = app.screens()
-    return screens.index(app.primaryScreen()) if app.primaryScreen() in screens else 0
+    # Plasma's ScreenPool orders outputs by priority: primaryScreen() is first
+    # and idForScreen() indexes that ordered list, NOT QGuiApplication.screens().
+    # https://github.com/KDE/plasma-workspace/blob/v6.5.0/shell/screenpool.cpp
+    return 0
 
 
 def desktop_profile(screens: list[dict]) -> dict:
@@ -985,6 +990,80 @@ def share_path_allowed(rel: str) -> bool:
 
 def _safe_asset_name(name: str) -> bool:
     return bool(name and re.fullmatch(r"[\w .+@#-]+", name) and name not in (".", ".."))
+
+
+def portable_wallpaper_config(text: str, included_roots: tuple[Path, ...] = ()) -> tuple[str, list[tuple[Path, str]]]:
+    """Embed every selected file wallpaper and replace machine-specific paths."""
+    assets = {}
+    output = []
+    for line in text.splitlines():
+        if line.startswith("Image="):
+            value = line.split("=", 1)[1]
+            raw = urllib.parse.unquote(value.removeprefix("file://"))
+            source = Path(raw)
+            if source.is_absolute() and not source.exists():
+                raise ValueError("Wallpaper nicht erreichbar / Wallpaper unavailable: " + str(source)
+                                 + ". Laufwerk verbinden und erneut sichern / Connect the drive and retry.")
+            if source.is_absolute() and source.is_file():
+                included = next((root for root in included_roots
+                                 if source.is_relative_to(root)), None)
+                if included is not None:
+                    rel = str(source.relative_to(HOME))
+                else:
+                    digest = sha256_file(source)[:24]
+                    suffix = source.suffix if len(source.suffix) <= 16 else ""
+                    rel = ".local/share/wallpapers/SaveYourKDEDesign/" + digest + suffix
+                    assets[rel] = source.resolve(strict=True)
+                line = "Image=file://" + HOME_TOKEN + "/" + rel
+        output.append(line)
+    suffix = "\n" if text.endswith("\n") else ""
+    return "\n".join(output) + suffix, [(source, rel) for rel, source in assets.items()]
+
+
+def share_layout_setting_allowed(key: str, value: str) -> bool:
+    """Permit typed visual values, never arbitrary text from unknown widgets."""
+    lowered = key.casefold().replace("-", "").replace("_", "")
+    blocked = ("command", "execute", "executable", "password", "passwd", "secret",
+               "token", "apikey", "username", "email", "note", "text", "shell",
+               "script", "program", "history", "recent", "clipboard")
+    if any(word in lowered for word in blocked):
+        return False
+    identity = {os.environ.get("USER", ""), socket.gethostname()}
+    if any(item and len(item) >= 3 and item.casefold() in value.casefold()
+           for item in identity):
+        return False
+    if re.search(r"(?:^|[=\s])/(?:home|root|run/user)/", value) or "file://" in value:
+        return False
+    if "://" in value and not value.startswith(("applications:", "preferred:")):
+        return False
+    if key == "launchers":
+        return all(re.fullmatch(r"(?:applications|preferred):[A-Za-z0-9_.+-]+", item)
+                   for item in value.split(","))
+    if key == "globalSettings" and len(value) <= 256000:
+        # Panel Colorizer's structured appearance settings contain no free text.
+        # Reject unknown text, paths and commands rather than publishing them.
+        literals = {"", "View", "Window", "Button", "Selection", "Tooltip",
+                    "Complementary", "Header", "adaptive", "center", "fill",
+                    "none", "top", "bottom", "left", "right", "backgroundColor",
+                    "highlightColor", "textColor", "foregroundColor"}
+        def visual(node, depth=0):
+            if depth > 32:
+                return False
+            if isinstance(node, dict):
+                return all(re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", k)
+                           and not any(word in k.casefold() for word in blocked)
+                           and visual(v, depth + 1) for k, v in node.items())
+            if isinstance(node, list):
+                return all(visual(v, depth + 1) for v in node)
+            if isinstance(node, str):
+                return node in literals or bool(re.fullmatch(r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?", node))
+            return node is None or isinstance(node, (bool, int, float))
+        try:
+            return visual(json.loads(value))
+        except (ValueError, RecursionError):
+            return False
+    return (len(value) <= 8192 and bool(re.fullmatch(
+        r"(?:true|false|-?\d+(?:\.\d+)?(?:[,;]-?\d+(?:\.\d+)?)*)", value)))
 
 
 def extension_package_info(package: Path) -> dict[str, str]:
@@ -1038,6 +1117,14 @@ def primary_layout_values(values: list[tuple[str, str, str]], primary: int):
         match = re.fullmatch(r"\[Containments\]\[(\d+)\]", group)
         if match and key == "lastScreen" and value == str(primary):
             selected.add(match.group(1))
+    while True:
+        linked = {value for group, key, value in values
+                  if (match := re.match(r"^\[Containments\]\[(\d+)\]", group))
+                  and match.group(1) in selected
+                  and key == "SystrayContainmentId" and value.isdigit()}
+        if linked <= selected:
+            break
+        selected.update(linked)
     result = []
     for row in values:
         group = row[0]
@@ -1069,11 +1156,20 @@ def _screen_containments(blocks, screen: int):
         match = re.fullmatch(r"\[Containments\]\[(\d+)\]", group)
         if match and any(line == f"lastScreen={screen}" for line in lines):
             selected.add(match.group(1))
+    while True:
+        linked = {line.split("=", 1)[1] for group, lines in blocks
+                  if (match := re.match(r"^\[Containments\]\[(\d+)\]", group))
+                  and match.group(1) in selected for line in lines
+                  if re.fullmatch(r"SystrayContainmentId=\d+", line)}
+        if linked <= selected:
+            break
+        selected.update(linked)
     return selected
 
 
 def merge_primary_applet_config(source: str, target: str,
-                                source_primary: int, target_primary: int) -> str:
+                                source_primary: int, target_primary: int,
+                                id_mapping: dict | None = None) -> str:
     """Replace only the target primary-screen containments and retain all others."""
     target_preamble, target_blocks = _kconfig_blocks(target)
     _, source_blocks = _kconfig_blocks(source)
@@ -1103,9 +1199,12 @@ def merge_primary_applet_config(source: str, target: str,
         mapping[str(old)] = str(next_id)
         used.add(next_id)
         next_id += 1
+    if id_mapping is not None:
+        id_mapping.update(mapping)
 
     def remap_group(group):
-        return re.sub(r"\[(\d+)\]", lambda m: "[" + mapping.get(m.group(1), m.group(1)) + "]", group)
+        return re.sub(r"\[(Containments|Applets)\]\[(\d+)\]",
+                      lambda m: "[" + m.group(1) + "][" + mapping.get(m.group(2), m.group(2)) + "]", group)
 
     transformed = []
     for group, lines in incoming:
@@ -1125,6 +1224,25 @@ def merge_primary_applet_config(source: str, target: str,
         output.append(group)
         output.extend(lines)
     return "\n".join(output).rstrip() + "\n"
+
+
+def merge_panel_views(source: str, target: str, mapping: dict, removed: set) -> str:
+    """Keep target secondary panels and map imported Panel IDs with the layout."""
+    preamble, target_blocks = _kconfig_blocks(target)
+    _, source_blocks = _kconfig_blocks(source)
+    result = list(preamble)
+    for group, lines in target_blocks:
+        match = re.match(r"^\[PlasmaViews\]\[Panel (\d+)\]", group)
+        if match and match.group(1) in removed:
+            continue
+        result.extend([group, *lines])
+    for group, lines in source_blocks:
+        match = re.match(r"^\[PlasmaViews\]\[Panel (\d+)\]", group)
+        if match and match.group(1) in mapping:
+            group = group.replace("[Panel " + match.group(1) + "]",
+                                  "[Panel " + mapping[match.group(1)] + "]", 1)
+            result.extend([group, *lines])
+    return "\n".join(result).rstrip() + "\n"
 
 
 def selected_font_files(family: str) -> list[Path]:
@@ -1151,6 +1269,7 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
     copied_count = 0
     seen = set()
     exported_fonts = set()
+    export_primary = primary_screen
 
     def copy_asset(src: Path, rel: str, allowed_root: Path):
         nonlocal copied_bytes, copied_count
@@ -1239,14 +1358,19 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
         overrides = read_kconfig(HOME / ".config" / filename)
         values = list({(g, k): (g, k, v) for g, k, v in [*defaults, *overrides]}.values())
         if filename == "plasma-org.kde.plasma.desktop-appletsrc":
-            values = primary_layout_values(values, primary_screen)
+            export_primary = primary_screen
+            values = primary_layout_values(values, export_primary)
         lines, group_before = [], None
         for group, key, value in values:
             enabled_effect = filename == "kwinrc" and group == "[Plugins]" and key.endswith("Enabled")
-            if key not in VISUAL_KEYS and not enabled_effect:
+            layout_extra = (key not in VISUAL_KEYS
+                            and filename == "plasma-org.kde.plasma.desktop-appletsrc"
+                            and share_layout_setting_allowed(key, value))
+            if key not in VISUAL_KEYS and not enabled_effect and not layout_extra:
                 omitted.append(filename + ":" + key)
                 continue
-            if "\x00" in value or len(value) > 8192:
+            if "\x00" in value or len(value) > (256000 if layout_extra and key == "globalSettings" else 8192):
+                omitted.append(filename + ":" + key)
                 continue
             if key == "Image":
                 raw = urllib.parse.unquote(value.removeprefix("file://"))
@@ -1260,7 +1384,8 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                 rel = ".local/share/wallpapers/sdd/" + digest + wallpaper.suffix
                 copy_asset(wallpaper, rel, wallpaper.parent)
                 value = "file://" + HOME_TOKEN + "/" + rel
-            elif "/" in value or "\\" in value or "://" in value or str(HOME) in value:
+            elif (("/" in value or "\\" in value or "://" in value or str(HOME) in value)
+                  and not layout_extra):
                 omitted.append(filename + ":" + key)
                 continue
             if filename == "kdeglobals":
@@ -1338,7 +1463,7 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
     profile = desktop_profile(screens)
     if not profile.get("plasma") or not profile.get("session"):
         raise ValueError("Cannot determine the KDE version or session; export from your KDE desktop session")
-    profile["primary_screen"] = primary_screen
+    profile["primary_screen"] = export_primary
     if "desktop" in profile and profile["desktop"] != "KDE":
         raise ValueError("Export from a KDE Plasma session / Bitte aus einer KDE-Plasma-Sitzung exportieren")
     return {"app": APP_NAME, "version": VERSION, "public_design": 1,
@@ -1985,13 +2110,14 @@ def design_install_plan(manifest: dict, current: dict, styles: list[str]):
     return None
 
 
-def safe_extract(archive: tarfile.TarFile, destination: Path):
+def safe_extract(archive: tarfile.TarFile, destination: Path,
+                 skip_external_links: bool = False) -> list[str]:
     """Reject escapes, special files and unsafe links on every Python version.
 
     Write regular files first, links last, so an archive cannot create a link
     and subsequently write through it. Also used by private backup restores.
     """
-    links, names, total = [], set(), 0
+    links, names, total, skipped = [], set(), 0, []
     for member in archive:
         name = member.name.rstrip("/")
         parts = name.split("/")
@@ -2000,7 +2126,7 @@ def safe_extract(archive: tarfile.TarFile, destination: Path):
             raise ValueError("Unsafe or duplicate archive path")
         names.add(name)
         total += member.size
-        if len(names) > SHARE_FILE_LIMIT + 1 or total > 4_000_000_000:
+        if len(names) > RESTORE_FILE_LIMIT or total > RESTORE_EXPANDED_LIMIT:
             raise ValueError("Archive exceeds extraction limits")
         target = destination / name
         if member.isdir():
@@ -2019,9 +2145,15 @@ def safe_extract(archive: tarfile.TarFile, destination: Path):
             raise ValueError("Archive link conflicts with another file")
         link = member.linkname
         if os.path.isabs(link) or "\\" in link:
+            if skip_external_links:
+                skipped.append(member.name)
+                continue
             raise ValueError("External archive link rejected")
         resolved = ((target.parent if member.issym() else destination) / link).resolve()
         if not resolved.is_relative_to(destination.resolve()):
+            if skip_external_links:
+                skipped.append(member.name)
+                continue
             raise ValueError("External archive link rejected")
         target.parent.mkdir(parents=True, exist_ok=True)
         if member.issym():
@@ -2030,6 +2162,7 @@ def safe_extract(archive: tarfile.TarFile, destination: Path):
             shutil.copyfile(resolved, target)
         else:
             raise ValueError("Invalid archive hard link")
+    return skipped
 
 
 class ShareWorker(QThread):
@@ -2276,8 +2409,25 @@ class BackupWorker(QThread):
                     if p.exists():
                         paths.append((cat, p))
 
-            total = len(paths) + (1 if self.with_packages else 0) + 1
+            layout_path = HOME / ".config/plasma-org.kde.plasma.desktop-appletsrc"
+            portable_layout = None
+            wallpaper_assets: list[tuple[Path, str]] = []
+            if layout_path.is_file() and any(p == layout_path for _, p in paths):
+                included_wallpapers = ((HOME / ".local/share/wallpapers",)
+                                       if any(p == HOME / ".local/share/wallpapers" for _, p in paths)
+                                       else ())
+                portable_layout, wallpaper_assets = portable_wallpaper_config(
+                    layout_path.read_text(encoding="utf-8", errors="strict"), included_wallpapers)
+
+            total = len(paths) + len(wallpaper_assets) + (1 if self.with_packages else 0) + 1
             done = 0
+
+            manifest_paths = [str(p.relative_to(HOME)) for _, p in paths]
+            if wallpaper_assets and ".local/share/wallpapers" not in manifest_paths:
+                manifest_paths.append(".local/share/wallpapers")
+            path_categories = {str(p.relative_to(HOME)): cat for cat, p in paths}
+            if wallpaper_assets:
+                path_categories[".local/share/wallpapers"] = "cat_plasma"
 
             manifest = {
                 "app": APP_NAME,
@@ -2287,7 +2437,9 @@ class BackupWorker(QThread):
                 "user": os.environ.get("USER", ""),
                 "categories": self.categories,
                 "with_packages": self.with_packages,
-                "paths": [str(p.relative_to(HOME)) for _, p in paths],
+                "paths": manifest_paths,
+                "path_categories": path_categories,
+                "portable_home_token": bool(portable_layout and HOME_TOKEN in portable_layout),
             }
 
             with tarfile.open(self.dest, "w:gz") as tar:
@@ -2295,9 +2447,23 @@ class BackupWorker(QThread):
                     rel = p.relative_to(HOME)
                     self.log.emit(f"  + {rel}")
                     try:
-                        tar.add(p, arcname=f"home/{rel}")
+                        if p == layout_path and portable_layout is not None:
+                            data = portable_layout.encode("utf-8")
+                            info = tarfile.TarInfo(f"home/{rel}")
+                            info.size = len(data)
+                            info.mode = p.stat().st_mode & 0o777
+                            info.mtime = int(p.stat().st_mtime)
+                            tar.addfile(info, io.BytesIO(data))
+                        else:
+                            tar.add(p, arcname=f"home/{rel}")
                     except (PermissionError, OSError) as e:
                         self.log.emit(f"{T('log_skipped')} ({e})")
+                    done += 1
+                    self.progress.emit(int(done / total * 100))
+
+                for source, rel in wallpaper_assets:
+                    self.log.emit(f"  + {rel}")
+                    tar.add(source, arcname="home/" + rel)
                     done += 1
                     self.progress.emit(int(done / total * 100))
 
@@ -2365,7 +2531,14 @@ class RestoreWorker(QThread):
                 tmpp = Path(tmp)
                 self.log.emit(T("log_extracting"))
                 with tarfile.open(self.archive, "r:gz") as tar:
-                    safe_extract(tar, tmpp)
+                    skipped_links = safe_extract(
+                        tar, tmpp, skip_external_links=not self.public)
+                if skipped_links:
+                    self.log.emit(
+                        f"  ! {len(skipped_links)} unsichere externe Alt-Links wurden ausgelassen; "
+                        "das Archiv wurde sonst vollständig entpackt. / "
+                        f"Skipped {len(skipped_links)} unsafe legacy external links; "
+                        "the rest of the archive was extracted.")
                 self.progress.emit(30)
 
                 src_home = tmpp / "home"
@@ -2403,49 +2576,61 @@ class RestoreWorker(QThread):
                         for r in rel_paths):
                     raise ValueError("Invalid restore paths in manifest")
                 if self.categories is not None and rel_paths:
-                    wanted = set()
-                    for cat in self.categories:
-                        wanted.update(CATEGORIES.get(cat, []))
-                    rel_paths = [r for r in rel_paths if r in wanted]
+                    path_categories = manifest.get("path_categories", {})
+                    if (isinstance(path_categories, dict) and path_categories
+                            and all(isinstance(k, str) and isinstance(v, str)
+                                    for k, v in path_categories.items())):
+                        rel_paths = [r for r in rel_paths
+                                     if path_categories.get(r) in self.categories]
+                    else:
+                        wanted = set()
+                        for cat in self.categories:
+                            wanted.update(CATEGORIES.get(cat, []))
+                        rel_paths = [r for r in rel_paths if r in wanted]
 
                 # Resolve every public destination before rollback or writes.
                 # Safe dotfile-manager links inside HOME are preserved; links
                 # escaping HOME and cycles remain blocked.
                 for rel in rel_paths:
-                    target = HOME / rel
-                    if self.public:
-                        safe_public_restore_target(rel)
-                    else:
-                        for parent in target.parents:
-                            if parent == HOME:
-                                break
-                            if parent.is_symlink():
-                                raise ValueError(f"Restore path uses a directory symlink: {rel}")
+                    safe_public_restore_target(rel)
 
-                if self.public:
+                if self.public or manifest.get("portable_home_token") is True:
                     for rel in rel_paths:
                         if rel in {".config/" + n for n in VISUAL_CONFIGS}:
                             config = src_home / rel
+                            if not config.is_file():
+                                continue
                             if config.stat().st_size > 4_000_000:
                                 raise ValueError("Configuration too large")
                             config.write_text(config.read_text(encoding="utf-8").replace(
                                 HOME_TOKEN, str(HOME)), encoding="utf-8")
                     layout_rel = ".config/plasma-org.kde.plasma.desktop-appletsrc"
                     layout = src_home / layout_rel
-                    if layout_rel in rel_paths and layout.is_file():
+                    if self.public and layout_rel in rel_paths and layout.is_file():
                         target = HOME / layout_rel
                         target_text = target.read_text(encoding="utf-8") if target.is_file() else ""
                         source_primary = manifest.get("profile", {}).get("primary_screen", 0)
+                        target_primary = self.primary_screen
+                        mapping = {}
                         layout.write_text(merge_primary_applet_config(
                             layout.read_text(encoding="utf-8"), target_text,
-                            source_primary, self.primary_screen), encoding="utf-8")
+                            source_primary, target_primary, mapping), encoding="utf-8")
+                        shell_rel = ".config/plasmashellrc"
+                        if shell_rel in rel_paths:
+                            shell = src_home / shell_rel
+                            current_shell = HOME / shell_rel
+                            removed = _screen_containments(_kconfig_blocks(target_text)[1], target_primary)
+                            shell.write_text(merge_panel_views(
+                                shell.read_text(encoding="utf-8"),
+                                current_shell.read_text(encoding="utf-8") if current_shell.is_file() else "",
+                                mapping, removed), encoding="utf-8")
 
                 if src_home.exists():
                     if self.rollback:
                         self.log.emit(T("log_rollback"))
                         saved = make_rollback(rel_paths, self.categories
                                               or manifest.get("categories", []),
-                                              dereference=self.public)
+                                              dereference=True)
                         if saved:
                             self.log.emit(f"  → {saved}")
 
@@ -2517,7 +2702,7 @@ class RestoreWorker(QThread):
 
     def _copy_into_home(self, entry: Path, src_root: Path):
         rel = entry.relative_to(src_root)
-        target = safe_public_restore_target(str(rel)) if self.public else HOME / rel
+        target = safe_public_restore_target(str(rel))
         self.log.emit(f"  → {rel}")
         target.parent.mkdir(parents=True, exist_ok=True)
         self._merge(entry, target)

@@ -1,4 +1,29 @@
-# SaveYourKDEDesign 1.7.6
+# SaveYourKDEDesign 1.7.7
+
+- Fix the false extraction-limit failure for large private backups. Public
+  packages keep their stricter limits; private backups allow 1 million entries
+  and 4 GB unpacked. Unsafe legacy external links are skipped and counted, never
+  followed. The reported 429,395-entry backup is covered by a local restore test.
+- Embed selected external file wallpapers in new private backups, including
+  file symlinks, and rebase their paths on the receiving computer. Report missing
+  wallpaper files with an instruction to reconnect the drive and retry.
+- Keep validated Panel Colorizer appearance JSON up to 256 KB instead of dropping
+  the reported 55-KB settings at the old 8-KB limit. Private text and commands are
+  still excluded from public designs.
+- Remap plasmashell panel-view IDs with layout IDs so panel size, length, opacity
+  and positioning settings follow their panels. Preserve linked system trays
+  even when their containment has no assigned screen.
+- Use Plasma's primary-output numbering, not Qt's independent screen list or
+  a guess based on how many panels a screen contains.
+- Fix legacy category selection and safely restore through in-home dotfile links.
+  Rollback no longer follows nested external links or directory cycles.
+
+Validation: 92 offline tests, plus extraction/restoration of the reported archive
+into a temporary home without modifying the running desktop. Graphical fidelity
+on Arch, Fedora and Kubuntu has not been verified end-to-end. Old codes/backups
+cannot supply omitted assets: create a fresh export from the intended design.
+
+## Previous release: 1.7.6
 
 - Fix public imports for systems where a visual configuration directory such as
   `~/.config/gtk-3.0` is managed by a symlink into a dotfiles directory inside

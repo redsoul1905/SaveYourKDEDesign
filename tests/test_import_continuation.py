@@ -94,6 +94,18 @@ class ImportContinuationTests(unittest.TestCase):
         self.assertFalse(any("secondary" in value for _, _, value in result))
         self.assertFalse(any(group == "[ScreenMapping]" for group, _, _ in result))
 
+    def test_primary_uses_plasma_order_not_qscreen_enumeration(self):
+        with patch.object(app.QGuiApplication, 'instance') as qt:
+            qt.return_value.screens.return_value = ['secondary', 'primary']
+            qt.return_value.primaryScreen.return_value = 'primary'
+            self.assertEqual(app.primary_screen_index(), 0)
+
+    def test_widget_visual_settings_are_kept_but_private_actions_are_not(self):
+        self.assertTrue(app.share_layout_setting_allowed("customBackgroundColor", "12,34,56,200"))
+        self.assertTrue(app.share_layout_setting_allowed("launchers", "applications:firefox.desktop"))
+        self.assertFalse(app.share_layout_setting_allowed("command", "do-dangerous-thing"))
+        self.assertFalse(app.share_layout_setting_allowed("text", "private note"))
+
     def test_restore_replaces_primary_layout_and_preserves_secondary(self):
         source = """[Containments][1]
 lastScreen=0
