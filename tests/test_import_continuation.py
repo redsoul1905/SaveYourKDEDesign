@@ -10,7 +10,7 @@ class ImportContinuationTests(unittest.TestCase):
     setUp = fixtures.SharingTests.setUp
     tearDown = fixtures.SharingTests.tearDown
 
-    def test_screen_order_is_not_a_layout_difference(self):
+    def test_screens_never_block_primary_design_import(self):
         first = PROFILE["screens"][0]
         second = {**first, "x": 1920}
         source = {**PROFILE, "screens": [first, second]}
@@ -19,8 +19,58 @@ class ImportContinuationTests(unittest.TestCase):
         self.assertTrue(app.matching_profile(source, target))
         self.assertEqual(app.compatibility_issues(doc, target, []), [])
         target["screens"] = [first, {**second, "scale": 2}]
-        self.assertFalse(app.matching_profile(source, target))
-        self.assertTrue(app.compatibility_issues(doc, target, []))
+        self.assertTrue(app.matching_profile(source, target))
+        self.assertEqual(app.compatibility_issues(doc, target, []), [])
+
+    def test_export_keeps_only_primary_screen_containments(self):
+        values = [
+            ("[Containments][10]", "lastScreen", "0"),
+            ("[Containments][10]", "plugin", "primary.desktop"),
+            ("[Containments][10][Applets][11]", "plugin", "primary.applet"),
+            ("[Containments][20]", "lastScreen", "1"),
+            ("[Containments][20]", "plugin", "secondary.desktop"),
+            ("[ScreenMapping]", "itemsOnDisabledScreens", "secret-machine-map"),
+        ]
+        result = app.primary_layout_values(values, 0)
+        self.assertIn(("[Containments][10]", "plugin", "primary.desktop"), result)
+        self.assertIn(("[Containments][10][Applets][11]", "plugin", "primary.applet"), result)
+        self.assertFalse(any("secondary" in value for _, _, value in result))
+        self.assertFalse(any(group == "[ScreenMapping]" for group, _, _ in result))
+
+    def test_restore_replaces_primary_layout_and_preserves_secondary(self):
+        source = """[Containments][1]
+lastScreen=0
+plugin=source.secondary
+[Containments][2]
+lastScreen=1
+plugin=source.primary
+AppletOrder=3
+[Containments][2][Applets][3]
+plugin=source.clock
+"""
+        target = """[Containments][10]
+lastScreen=0
+plugin=old.primary
+[Containments][2]
+lastScreen=1
+plugin=target.secondary
+[ScreenMapping]
+foo=bar
+"""
+        merged = app.merge_primary_applet_config(source, target, 1, 0)
+        self.assertNotIn("old.primary", merged)
+        self.assertNotIn("source.secondary", merged)
+        self.assertIn("target.secondary", merged)
+        self.assertIn("source.primary", merged)
+        self.assertIn("source.clock", merged)
+        self.assertIn("lastScreen=0", merged)
+        self.assertIn("[ScreenMapping]\nfoo=bar", merged)
+        self.assertNotIn("[Containments][2]\nlastScreen=0\nplugin=source.primary", merged)
+
+    def test_missing_source_primary_never_erases_target(self):
+        target = "[Containments][1]\nlastScreen=0\nplugin=keep.me\n"
+        source = "[Containments][2]\nlastScreen=1\nplugin=other.screen\n"
+        self.assertEqual(app.merge_primary_applet_config(source, target, 0, 0), target)
 
     def test_compiled_applets_are_detected_without_allowlisting_unknown_ids(self):
         root = self.root / "plugins"

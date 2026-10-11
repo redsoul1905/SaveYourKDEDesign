@@ -1,4 +1,20 @@
-# SaveYourKDEDesign 1.7.3
+# SaveYourKDEDesign 1.7.4
+
+- Remove monitor count, resolution, scale, position and enumeration from public
+  import compatibility checks. Display differences no longer block anything.
+- Export only Plasma containments belonging to the source primary screen.
+- Apply those containments to the target primary screen, remapping containment
+  and applet identifiers safely.
+- Preserve target secondary-screen containments and the target ScreenMapping.
+- Keep Plasma-version/session and extension checks; display configuration itself
+  is never changed.
+- Old SDD1 designs remain accepted. For old multi-monitor exports without an
+  explicit primary marker, Plasma screen 0 is treated as the source primary.
+
+Validation covers different monitor counts, geometry and scaling, primary-only
+filtering, identifier remapping and preservation of secondary target layouts.
+
+## Previous release: 1.7.3
 
 - Replace the unhelpful “no verified repository provider” result for Klassy and
   Glass with a concrete, distribution-specific installation proposal.

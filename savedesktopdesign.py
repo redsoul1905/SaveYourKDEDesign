@@ -46,7 +46,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.7.3"
+VERSION = "1.7.4"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -923,6 +923,14 @@ def screen_profile() -> list[dict]:
                    for s in app.screens()], key=lambda s: (s["x"], s["y"]))
 
 
+def primary_screen_index() -> int:
+    app = QGuiApplication.instance()
+    if app is None or app.primaryScreen() is None:
+        return 0
+    screens = app.screens()
+    return screens.index(app.primaryScreen()) if app.primaryScreen() in screens else 0
+
+
 def desktop_profile(screens: list[dict]) -> dict:
     out = _run_cmd(["plasmashell", "--version"], 10) or ""
     version = re.search(r"\b(\d+\.\d+(?:\.\d+)?)\b", out)
@@ -949,6 +957,102 @@ def _safe_asset_name(name: str) -> bool:
     return bool(name and re.fullmatch(r"[\w .+@#-]+", name) and name not in (".", ".."))
 
 
+def primary_layout_values(values: list[tuple[str, str, str]], primary: int):
+    """Keep only Plasma containments belonging to the exporting primary screen."""
+    selected = set()
+    for group, key, value in values:
+        match = re.fullmatch(r"\[Containments\]\[(\d+)\]", group)
+        if match and key == "lastScreen" and value == str(primary):
+            selected.add(match.group(1))
+    result = []
+    for row in values:
+        group = row[0]
+        match = re.match(r"^\[Containments\]\[(\d+)\]", group)
+        if match:
+            if match.group(1) in selected:
+                result.append(row)
+        elif group != "[ScreenMapping]":
+            result.append(row)
+    return result
+
+
+def _kconfig_blocks(text: str):
+    preamble, blocks, current = [], [], None
+    for line in text.splitlines():
+        if line.startswith("[") and line.endswith("]"):
+            current = [line, []]
+            blocks.append(current)
+        elif current is None:
+            preamble.append(line)
+        else:
+            current[1].append(line)
+    return preamble, blocks
+
+
+def _screen_containments(blocks, screen: int):
+    selected = set()
+    for group, lines in blocks:
+        match = re.fullmatch(r"\[Containments\]\[(\d+)\]", group)
+        if match and any(line == f"lastScreen={screen}" for line in lines):
+            selected.add(match.group(1))
+    return selected
+
+
+def merge_primary_applet_config(source: str, target: str,
+                                source_primary: int, target_primary: int) -> str:
+    """Replace only the target primary-screen containments and retain all others."""
+    target_preamble, target_blocks = _kconfig_blocks(target)
+    _, source_blocks = _kconfig_blocks(source)
+    source_ids = _screen_containments(source_blocks, source_primary)
+    target_ids = _screen_containments(target_blocks, target_primary)
+    if not source_ids:
+        return target if target.endswith("\n") or not target else target + "\n"
+
+    retained = []
+    for block in target_blocks:
+        match = re.match(r"^\[Containments\]\[(\d+)\]", block[0])
+        if not match or match.group(1) not in target_ids:
+            retained.append(block)
+    incoming = [block for block in source_blocks
+                if (match := re.match(r"^\[Containments\]\[(\d+)\]", block[0]))
+                and match.group(1) in source_ids]
+
+    used = {int(number) for group, _ in retained if group.startswith("[Containments]")
+            for number in re.findall(r"\[(\d+)\]", group)}
+    source_numbers = sorted({int(number) for group, _ in incoming
+                             for number in re.findall(r"\[(\d+)\]", group)})
+    next_id = max(used | set(source_numbers) | {0}) + 1
+    mapping = {}
+    for old in source_numbers:
+        while next_id in used:
+            next_id += 1
+        mapping[str(old)] = str(next_id)
+        used.add(next_id)
+        next_id += 1
+
+    def remap_group(group):
+        return re.sub(r"\[(\d+)\]", lambda m: "[" + mapping.get(m.group(1), m.group(1)) + "]", group)
+
+    transformed = []
+    for group, lines in incoming:
+        top = bool(re.fullmatch(r"\[Containments\]\[(\d+)\]", group))
+        updated = []
+        for line in lines:
+            key, sep, value = line.partition("=")
+            if sep and top and key == "lastScreen":
+                value = str(target_primary)
+            elif sep and key in {"containmentId", "SystrayContainmentId", "AppletOrder"}:
+                value = re.sub(r"\d+", lambda m: mapping.get(m.group(0), m.group(0)), value)
+            updated.append(key + sep + value if sep else line)
+        transformed.append((remap_group(group), updated))
+
+    output = list(target_preamble)
+    for group, lines in [*retained, *transformed]:
+        output.append(group)
+        output.extend(lines)
+    return "\n".join(output).rstrip() + "\n"
+
+
 def selected_font_files(family: str) -> list[Path]:
     """Include every installed style of an exact family, never a silent fallback."""
     output = _run_cmd(["fc-list", "--format", "%{family}\t%{file}\n"], 15) or ""
@@ -962,7 +1066,8 @@ def selected_font_files(family: str) -> list[Path]:
     return sorted(found)
 
 
-def public_design(stage: Path, screens: list[dict], log=lambda message: None) -> dict:
+def public_design(stage: Path, screens: list[dict], log=lambda message: None,
+                  primary_screen: int = 0) -> dict:
     """Build a visual-only tree, never a copy of the user's private backup."""
     home = stage / "home"
     home.mkdir()
@@ -1055,6 +1160,8 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None) ->
         defaults = read_kconfig(HOME / ".config/kdedefaults" / filename)
         overrides = read_kconfig(HOME / ".config" / filename)
         values = list({(g, k): (g, k, v) for g, k, v in [*defaults, *overrides]}.values())
+        if filename == "plasma-org.kde.plasma.desktop-appletsrc":
+            values = primary_layout_values(values, primary_screen)
         lines, group_before = [], None
         for group, key, value in values:
             enabled_effect = filename == "kwinrc" and group == "[Plugins]" and key.endswith("Enabled")
@@ -1151,8 +1258,9 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None) ->
     if not paths:
         raise ValueError("No shareable KDE design found")
     profile = desktop_profile(screens)
-    if not profile.get("plasma") or not profile.get("session") or not profile.get("screens"):
-        raise ValueError("Cannot determine the KDE version, session or screen layout; export from your KDE desktop session")
+    if not profile.get("plasma") or not profile.get("session"):
+        raise ValueError("Cannot determine the KDE version or session; export from your KDE desktop session")
+    profile["primary_screen"] = primary_screen
     if "desktop" in profile and profile["desktop"] != "KDE":
         raise ValueError("Export from a KDE Plasma session / Bitte aus einer KDE-Plasma-Sitzung exportieren")
     return {"app": APP_NAME, "version": VERSION, "public_design": 1,
@@ -1293,6 +1401,9 @@ def inspect_public_archive(path: Path) -> dict:
                            for value in screen.values())
                     or screen["width"] <= 0 or screen["height"] <= 0 or screen["scale"] <= 0):
                 raise ValueError("Invalid screen profile")
+        primary = profile.get("primary_screen", 0)
+        if type(primary) is not int or primary < 0 or (screens and primary >= len(screens)):
+            raise ValueError("Invalid primary screen")
         requirements = manifest.get("requirements")
         if not isinstance(requirements, list) or len(requirements) > 1000:
             raise ValueError("Invalid requirements")
@@ -1314,7 +1425,7 @@ def profile_value(profile: dict, key: str):
 
 def matching_profile(source: dict, current: dict) -> bool:
     return all(profile_value(source, k) and profile_value(source, k) == profile_value(current, k)
-               for k in ("plasma", "session", "screens"))
+               for k in ("plasma", "session"))
 
 
 def package_profile_compatible(source: dict, current: dict) -> bool:
@@ -1350,7 +1461,7 @@ def compatibility_issues(manifest: dict, current: dict, styles: list[str]) -> li
     issues = []
     if "desktop" in current and "kde" not in current["desktop"].lower().split(":"):
         issues.append("Please log into a KDE Plasma session / Bitte in KDE Plasma anmelden")
-    for key in ("plasma", "session", "screens"):
+    for key in ("plasma", "session"):
         if not source.get(key) or not current.get(key) or profile_value(source, key) != profile_value(current, key):
             issues.append(f"{key}: {source.get(key)} → {current.get(key)}")
     effects = None
@@ -1820,11 +1931,13 @@ class ShareWorker(QThread):
     ready = pyqtSignal(str, object)
     failed = pyqtSignal(str)
 
-    def __init__(self, screens, code="", dest=None, styles=None, recheck=False):
+    def __init__(self, screens, code="", dest=None, styles=None, recheck=False,
+                 primary_screen=0):
         super().__init__()
         self.screens, self.code, self.dest = screens, code, dest
         self.styles = styles or []
         self.recheck = recheck
+        self.primary_screen = primary_screen
 
     def run(self):
         try:
@@ -1858,7 +1971,7 @@ class ShareWorker(QThread):
             else:
                 with tempfile.TemporaryDirectory(prefix="sdd-share-") as tmp:
                     root = Path(tmp)
-                    manifest = public_design(root, self.screens, self.log.emit)
+                    manifest = public_design(root, self.screens, self.log.emit, self.primary_screen)
                     path = root / "design.sdd"
                     with tarfile.open(path, "w:gz") as archive:
                         for rel in manifest["paths"]:
@@ -2123,7 +2236,7 @@ class RestoreWorker(QThread):
 
     def __init__(self, archive: str, categories: list[str] | None = None,
                  rollback: bool = True, public: bool = False,
-                 screens=None, styles=None):
+                 screens=None, styles=None, primary_screen=0):
         super().__init__()
         self.archive = archive
         self.categories = categories   # None = alles aus dem Archiv
@@ -2131,6 +2244,7 @@ class RestoreWorker(QThread):
         self.public = public
         self.screens = screens or []
         self.styles = styles or []
+        self.primary_screen = primary_screen
 
     def run(self):
         try:
@@ -2207,6 +2321,15 @@ class RestoreWorker(QThread):
                                 raise ValueError("Configuration too large")
                             config.write_text(config.read_text(encoding="utf-8").replace(
                                 HOME_TOKEN, str(HOME)), encoding="utf-8")
+                    layout_rel = ".config/plasma-org.kde.plasma.desktop-appletsrc"
+                    layout = src_home / layout_rel
+                    if layout_rel in rel_paths and layout.is_file():
+                        target = HOME / layout_rel
+                        target_text = target.read_text(encoding="utf-8") if target.is_file() else ""
+                        source_primary = manifest.get("profile", {}).get("primary_screen", 0)
+                        layout.write_text(merge_primary_applet_config(
+                            layout.read_text(encoding="utf-8"), target_text,
+                            source_primary, self.primary_screen), encoding="utf-8")
 
                 if src_home.exists():
                     if self.rollback:
@@ -2508,7 +2631,7 @@ class MainWindow(QMainWindow):
                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
-        self._start_share(ShareWorker(screen_profile()), "share_upload")
+        self._start_share(ShareWorker(screen_profile(), primary_screen=primary_screen_index()), "share_upload")
 
     def import_code(self):
         if self._worker_running():
@@ -2671,34 +2794,18 @@ class MainWindow(QMainWindow):
                     self._start_share(DesignInstallWorker(screen_profile(), dest=Path(value),
                                                           styles=QStyleFactory.keys()), "share_installing")
                     return
-            screen_issue = next((row for row in details["issues"] if row.startswith("screens:")), None)
-            other_issues = [row for row in details["issues"] if not row.startswith("screens:")]
-            if screen_issue and not other_issues and shutil.which("kcmshell6"):
-                dialog = QMessageBox(self)
-                dialog.setWindowTitle(APP_NAME)
-                dialog.setIcon(QMessageBox.Icon.Information)
-                dialog.setText("Die benötigten Erweiterungen sind geprüft. Jetzt muss noch die Bildschirm-Anordnung zum Design passen.")
-                dialog.setInformativeText("Öffne die Anzeige-Einstellungen. Sobald du sie schließt, prüft SaveYourKDEDesign automatisch erneut.")
-                open_button = dialog.addButton("Anzeige-Einstellungen öffnen", QMessageBox.ButtonRole.AcceptRole)
-                dialog.addButton(QMessageBox.StandardButton.Cancel)
-                dialog.setDetailedText(message)
-                dialog.exec()
-                if dialog.clickedButton() is open_button:
-                    self._open_screen_settings_and_recheck(Path(value))
-                    return
-            else:
-                dialog = QMessageBox(self)
-                dialog.setWindowTitle(APP_NAME)
-                dialog.setIcon(QMessageBox.Icon.Warning)
-                guidance = [*native.get("notes", []), *community.get("notes", [])]
-                if community.get("manual_command"):
-                    guidance.append("Terminal-Befehl: " + community["manual_command"])
-                dialog.setText("Einige benötigte Erweiterungen konnten nicht automatisch installiert werden."
-                               + (("\n\nSo gehst du weiter:\n" + "\n".join(guidance)) if guidance else ""))
-                dialog.setInformativeText("Unter „Details“ stehen die Komponentennamen. Es wurden keine Design-Einstellungen geändert.")
-                dialog.setDetailedText(message)
-                dialog.setStandardButtons(QMessageBox.StandardButton.Close)
-                dialog.exec()
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle(APP_NAME)
+            dialog.setIcon(QMessageBox.Icon.Warning)
+            guidance = [*native.get("notes", []), *community.get("notes", [])]
+            if community.get("manual_command"):
+                guidance.append("Terminal-Befehl: " + community["manual_command"])
+            dialog.setText("Einige benötigte Erweiterungen konnten nicht automatisch installiert werden."
+                           + (("\n\nSo gehst du weiter:\n" + "\n".join(guidance)) if guidance else ""))
+            dialog.setInformativeText("Unter „Details“ stehen die Komponentennamen. Es wurden keine Design-Einstellungen geändert.")
+            dialog.setDetailedText(message)
+            dialog.setStandardButtons(QMessageBox.StandardButton.Close)
+            dialog.exec()
             self._clean_share_temp()
             return
         review = T("share_review") + "\n\n" + T("share_extensions") + "\n" + "\n".join(details.get("extensions", [])) + "\n\n" + T("share_apply")
@@ -2708,18 +2815,6 @@ class MainWindow(QMainWindow):
             self._clean_share_temp()
             return
         self._start_restore(value, None, True, public=True, styles=details.get("styles"))
-
-    def _open_screen_settings_and_recheck(self, archive: Path):
-        executable = shutil.which("kcmshell6")
-        if not executable:
-            return
-        self._set_busy(True)
-        self.action_process = QProcess(self)
-        self.action_process.finished.connect(
-            lambda *_: self._start_share(ShareWorker(screen_profile(), dest=archive,
-                                      styles=QStyleFactory.keys(), recheck=True), "share_download"))
-        self.action_process.errorOccurred.connect(lambda *_: self._screen_settings_failed())
-        self.action_process.start(executable, ["kcm_kscreen"])
 
     def _start_terminal_install_and_recheck(self, plan: dict, archive: Path):
         self._set_busy(True)
@@ -2735,11 +2830,6 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, APP_NAME,
                             "Das Installationsterminal konnte nicht geöffnet werden. Führe diesen Befehl aus:\n\n"
                             + shlex.join(plan["command"]))
-
-    def _screen_settings_failed(self):
-        self._set_busy(False)
-        self._clean_share_temp()
-        QMessageBox.warning(self, APP_NAME, "Die Anzeige-Einstellungen konnten nicht geöffnet werden.")
 
     def _clean_share_temp(self):
         if self.share_temp is not None:
@@ -2914,7 +3004,8 @@ class MainWindow(QMainWindow):
         self.restore_log.clear()
         self._public_restore = public
         self.restore_worker = RestoreWorker(archive, categories, rollback, public,
-                                            screen_profile(), styles if styles is not None else QStyleFactory.keys())
+                                            screen_profile(), styles if styles is not None else QStyleFactory.keys(),
+                                            primary_screen_index())
         self.restore_worker.log.connect(self.restore_log.append)
         self.restore_worker.progress.connect(self.restore_progress.setValue)
         self.restore_worker.finished_ok.connect(self._restore_done)

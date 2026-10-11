@@ -10,9 +10,14 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.7.3** · [Changelog](#changelog)
+**Current version: 1.7.4** · [Changelog](#changelog)
 
-**New in 1.7.3:** known community-only components now get an actionable,
+**New in 1.7.4:** public designs use only the exporting primary screen as the
+Plasma-layout source. Monitor count, resolution, scale, position and enumeration
+are no longer compared and never block import. On the target, only primary-screen
+containments are replaced; layouts and screen mapping for additional monitors are
+preserved. Version 1.7.3 added actionable, distribution-specific installation
+paths for known community-only components:
 distribution-specific installation path. Arch derivatives can install Klassy and
 Glass through an existing `yay`/`paru`. Fedora uses the confirmed Klassy and
 Glass COPR repositories through `dnf` and never offers AUR. The user confirms
@@ -75,11 +80,11 @@ script is selected. The Kvantum
 mapping remains available. Nonstandard filenames, unindexed packages, native
 binaries inside theme payloads and undeclared dependencies may still require
 manual setup. This is not an arbitrary-plugin installer.
-Exact Plasma/session/screen geometry checks still apply; monitor enumeration order
-alone is not a mismatch. Screen differences no longer suppress dependency lookup.
-When only screen geometry remains, the app opens KDE Display Configuration and
-automatically rechecks after it closes. This is not yet a universal
-one-click clone across arbitrary KDE releases or screen layouts.
+Plasma version and session checks still apply. Screen geometry is deliberately
+ignored: the source primary-screen layout is mapped onto the target primary screen
+without changing display settings. Secondary target-screen containments and KDE's
+screen mapping are retained. This is not yet a universal one-click clone across
+arbitrary KDE releases.
 
 Validation: offline mocked Ubuntu/Fedora/Arch repositories and administrator
 transactions, minimum-version checks, cancellation and active-session checks.
@@ -189,15 +194,17 @@ contain personal material; review them before publishing. Only redistribute
 assets whose licenses allow it. Use the existing **Back up** tab for private backups.
 
 **Compatibility is conservative, not a promise of pixel-identical rendering.**
-Public import currently requires the same full Plasma version, session type
-(Wayland/X11), and reported screen geometry/scaling. Native styles, decorations
+Public import currently requires the same full Plasma version and session type
+(Wayland/X11). Screen geometry/scaling is ignored; only the exported primary-screen
+layout is applied to the target primary screen. Native styles, decorations
 and enabled effects must be available. Differences stop import before design
 settings are written. Matching these checks does **not** prove identical rendering:
 Qt/plugin versions, GPU drivers, color management, custom widget settings and
-other unexported configuration can still differ. The exporter does not silently
-upgrade Plasma, add repositories, build AUR packages, or run commands from a
-downloaded manifest. A universal one-click Arch-to-any-Kubuntu clone is not
-implemented. Standard private-backup package lists still target the same distro family.
+other unexported configuration can still differ. Installation commands are fixed
+local mappings and never come from a downloaded manifest. Community repositories
+or AUR builds are offered only for known components with explicit consent. A
+universal one-click clone across arbitrary Plasma versions is not implemented.
+Standard private-backup package lists still target the same distro family.
 
 **Catbox limits:** maximum 200 MB per package; no splitting to bypass the limit.
 Codes can be reused while the file is hosted; the exporting PC can be offline.

@@ -88,6 +88,7 @@ class SharingTests(unittest.TestCase):
         wallpaper = self.home / "private-name.png"
         wallpaper.write_bytes(b"fake image")
         self.config("plasma-org.kde.plasma.desktop-appletsrc",
+                    "[Containments][1]\nlastScreen=0\n"
                     "[Containments][1][Wallpaper][org.kde.image][General]\nImage=" + wallpaper.as_uri() + "\n")
         stage = self.root / "stage"
         stage.mkdir()
@@ -264,9 +265,10 @@ class SharingTests(unittest.TestCase):
 
     def test_compatibility_blocks_unknown_or_different_environment(self):
         self.assertEqual(app.compatibility_issues(manifest(), PROFILE, []), [])
-        for key, value in (("plasma", "5.27.0"), ("session", "x11"), ("screens", [])):
+        for key, value in (("plasma", "5.27.0"), ("session", "x11")):
             current = {**PROFILE, key: value}
             self.assertTrue(app.compatibility_issues(manifest(), current, []))
+        self.assertEqual(app.compatibility_issues(manifest(), {**PROFILE, "screens": []}, []), [])
         doc = manifest()
         doc["requirements"] = [{"kind": "style", "name": "Kvantum"}]
         self.assertEqual(app.compatibility_issues(doc, PROFILE, ["kvantum"]), [])
