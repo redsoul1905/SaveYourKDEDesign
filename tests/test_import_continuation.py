@@ -156,3 +156,47 @@ class ImportContinuationTests(unittest.TestCase):
             self.assertTrue(app.native_effect_available("glass", PROFILE))
             self.assertTrue(app.native_effect_available("kwin4_effect_glass", PROFILE))
             self.assertFalse(app.native_effect_available("missing", PROFILE))
+
+    def test_known_arch_community_extensions_offer_interactive_install(self):
+        doc = manifest()
+        doc["requirements"] = [
+            {"kind": "decoration", "name": "org.kde.klassy"},
+            {"kind": "effect", "name": "glass"},
+            {"kind": "effect", "name": "kwin4_effect_glass"},
+        ]
+        issues = [r["kind"] + ": " + r["name"] for r in doc["requirements"]]
+        target = {**PROFILE, "screens": [{**PROFILE["screens"][0], "x": 500}]}
+        def executable(name):
+            return "/usr/bin/" + name if name in ("yay", "konsole") else None
+        with patch.object(app.platform, "freedesktop_os_release", return_value={"ID": "cachyos", "ID_LIKE": "arch"}), \
+                patch.object(app.shutil, "which", side_effect=executable), \
+                patch.object(app, "_run_cmd", return_value="Repository: aur\nName: verified\n") as query:
+            plan = app.community_extension_plan(doc, target, issues)
+        self.assertEqual(plan["command"], ["/usr/bin/yay", "-S", "--needed",
+                                           "klassy", "kwin-effects-glass-git"])
+        self.assertEqual(plan["terminal"], "/usr/bin/konsole")
+        self.assertEqual(query.call_count, 2)
+
+    def test_community_plan_gives_exact_fallback_without_aur_helper(self):
+        doc = manifest()
+        doc["requirements"] = [{"kind": "decoration", "name": "org.kde.klassy"}]
+        with patch.object(app.platform, "freedesktop_os_release", return_value={"ID": "arch"}), \
+                patch.object(app.shutil, "which", return_value=None):
+            plan = app.community_extension_plan(doc, PROFILE, ["decoration: org.kde.klassy"])
+        self.assertIsNone(plan["command"])
+        self.assertIn("yay -S --needed klassy", plan["notes"][0])
+
+    def test_fedora_uses_copr_not_aur(self):
+        doc = manifest()
+        doc["requirements"] = [{"kind": "decoration", "name": "org.kde.klassy"},
+                               {"kind": "effect", "name": "glass"}]
+        issues = ["decoration: org.kde.klassy", "effect: glass"]
+        with patch.object(app.platform, "freedesktop_os_release", return_value={"ID": "fedora"}), \
+                patch.object(app.shutil, "which", side_effect=lambda n: "/usr/bin/" + n):
+            plan = app.community_extension_plan(doc, PROFILE, issues)
+        self.assertEqual(plan["kind"], "fedora_copr")
+        self.assertNotIn("yay", plan["manual_command"])
+        self.assertNotIn("paru", plan["manual_command"])
+        self.assertIn("errornointernet/klassy", plan["manual_command"])
+        self.assertIn("ama1470/kwin-effects-glass", plan["manual_command"])
+        self.assertEqual(plan["command"][:2], ["/usr/bin/bash", "-lc"])

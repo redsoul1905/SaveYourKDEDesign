@@ -46,7 +46,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.7.2"
+VERSION = "1.7.3"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -1647,6 +1647,99 @@ def native_extension_plan(manifest: dict, current: dict, styles: list[str], issu
     return result
 
 
+def community_extension_plan(manifest: dict, current: dict, issues: list[str]) -> dict:
+    """Offer known community packages without pretending they are distro packages."""
+    result = {"command": None, "packages": [], "notes": [], "urls": [],
+              "manual_command": "", "kind": ""}
+    if not package_profile_compatible(manifest["profile"], current):
+        return result
+    try:
+        system = platform.freedesktop_os_release()
+    except OSError:
+        return result
+    distro = system.get("ID", "")
+    if "arch" in system.get("ID_LIKE", "").split():
+        distro = "arch"
+    known = {
+        ("decoration", "org.kde.klassy"): ("klassy", "https://github.com/paulmcauley/klassy"),
+        ("effect", "glass"): ("kwin-effects-glass-git", "https://github.com/4v3ngR/kwin-effects-glass"),
+        ("effect", "kwin4_effect_glass"): ("kwin-effects-glass-git", "https://github.com/4v3ngR/kwin-effects-glass"),
+    }
+    wanted = []
+    for req in manifest["requirements"]:
+        item = known.get((req["kind"], req["name"]))
+        if item and req["kind"] + ": " + req["name"] in issues:
+            wanted.append(item)
+    if not wanted:
+        return result
+    result["packages"] = sorted({package for package, _ in wanted})
+    result["urls"] = sorted({url for _, url in wanted})
+    if distro == "fedora":
+        commands = ["sudo dnf install -y dnf5-plugins || sudo dnf install -y dnf-plugins-core"]
+        wants_klassy = any(package == "klassy" for package in result["packages"])
+        wants_glass = any(package == "kwin-effects-glass-git" for package in result["packages"])
+        fedora_packages = []
+        if wants_klassy:
+            commands.extend(["sudo dnf copr enable -y errornointernet/klassy",
+                             "sudo dnf install -y klassy"])
+            fedora_packages.append("klassy")
+        if wants_glass:
+            commands.extend(["sudo dnf copr enable -y ama1470/kwin-effects-glass",
+                             "sudo dnf install -y kwin-effects-glass"])
+            fedora_packages.append("kwin-effects-glass")
+        result["packages"] = fedora_packages
+        script = "set -e; " + "; ".join(commands)
+        result["manual_command"] = script.removeprefix("set -e; ")
+        terminal = shutil.which("konsole")
+        shell = shutil.which("bash")
+        if terminal and shell:
+            result["command"] = [shell, "-lc", script]
+            result["terminal"] = terminal
+            result["kind"] = "fedora_copr"
+            result["notes"].append(
+                "Fedora: Die bestätigten COPR-Paketquellen für Klassy/Glass werden nach Zustimmung aktiviert. "
+                "COPR sind von der Gemeinschaft gepflegte Drittanbieterquellen; im Terminal wird dein Passwort abgefragt.")
+        else:
+            result["notes"].append("Fedora-Terminalbefehle: " + result["manual_command"])
+        return result
+    if distro != "arch":
+        if any(package == "klassy" for package in result["packages"]):
+            result["notes"].append(
+                "Klassy: Verwende die offiziellen Pakete des Entwicklers: "
+                "https://software.opensuse.org/download.html?project=home%3Apaulmcauley&package=klassy")
+        if distro in ("ubuntu", "debian") and any(package == "kwin-effects-glass-git" for package in result["packages"]):
+            result["notes"].append(
+                "Glass für Ubuntu/Debian muss passend zur Plasma-Version nach der Anleitung gebaut werden: "
+                "https://github.com/4v3ngR/kwin-effects-glass#installation")
+        if not result["notes"]:
+            result["notes"].append("Installationsseiten: " + " ".join(result["urls"]))
+        return result
+    helper = next((path for name in ("yay", "paru") if (path := shutil.which(name))), None)
+    terminal = shutil.which("konsole")
+    instruction = "yay -S --needed " + " ".join(result["packages"])
+    result["manual_command"] = instruction
+    if not helper:
+        result["notes"].append("AUR-Hilfe fehlt. Installiere yay oder paru und führe aus: " + instruction)
+        return result
+    available = [package for package in result["packages"]
+                 if _run_cmd([helper, "-Si", "--aur", package], 90)]
+    if len(available) != len(result["packages"]):
+        result["notes"].append("AUR-Pakete konnten nicht verifiziert werden. Manuelle Anleitung: "
+                               + " ".join(result["urls"]))
+        return result
+    if not terminal:
+        result["notes"].append("Öffne ein Terminal und führe aus: "
+                               + Path(helper).name + " -S --needed " + " ".join(available))
+        return result
+    result["command"] = [helper, "-S", "--needed", *available]
+    result["terminal"] = terminal
+    result["kind"] = "aur"
+    result["notes"].append(
+        "AUR-Gemeinschaftspakete: Der Paketinhalt wird außerhalb der offiziellen Distribution gebaut. "
+        "Vor der Installation zeigt yay/paru die Pakete an und fragt nach Bestätigung und Passwort.")
+    return result
+
+
 def design_install_plan(manifest: dict, current: dict, styles: list[str]):
     """A deliberately small local package mapping, never an archive command.
 
@@ -1757,8 +1850,10 @@ class ShareWorker(QThread):
                     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
                         native["command"] = None
                         native["notes"].append(str(error))
+                community = community_extension_plan(manifest, current, issues)
                 self.ready.emit(str(self.dest), {"manifest": manifest, "issues": issues,
-                                "setup": setup, "extensions": extensions, "native": native, "styles": self.styles,
+                                "setup": setup, "extensions": extensions, "native": native,
+                                "community": community, "styles": self.styles,
                                 "plan": design_install_plan(manifest, current, self.styles)})
             else:
                 with tempfile.TemporaryDirectory(prefix="sdd-share-") as tmp:
@@ -2491,6 +2586,7 @@ class MainWindow(QMainWindow):
             self.share_log.append(row)
         setup = details.get("setup", {})
         native = details.get("native", {})
+        community = details.get("community", {})
         if details.get("plan") and tuple(details["plan"][3]) in self._attempted_installs:
             details["plan"] = None
         if native.get("command") and tuple(native["command"]) in self._attempted_installs:
@@ -2500,6 +2596,11 @@ class MainWindow(QMainWindow):
                 "Die Installation wurde bereits ausgeführt, aber die Komponente ist noch nicht verfügbar. "
                 "Bitte nach einem neuen Plasma-Login dieses Programm öffnen: Der Import wird automatisch fortgesetzt. / "
                 "After a new Plasma login, reopen this app to resume the import automatically.")
+        if community.get("command") and tuple(community["command"]) in self._attempted_installs:
+            community["command"] = None
+            community.setdefault("notes", []).append(
+                "Die Gemeinschaftspakete wurden bereits aufgerufen, die Erweiterung ist aber noch nicht verfügbar. "
+                "Prüfe die Terminalausgabe oder melde dich neu in Plasma an.")
         for note in setup.get("notes", []):
             self.share_log.append(note)
         if details["issues"]:
@@ -2508,6 +2609,8 @@ class MainWindow(QMainWindow):
                 message += "\n\n" + "\n".join(setup["notes"])
             if native.get("notes"):
                 message += "\n\n" + "\n".join(native["notes"])
+            if community.get("notes"):
+                message += "\n\n" + "\n".join(community["notes"])
             self.share_log.append(message)
             if setup.get("command"):
                 question = ("Für dieses Design fehlt eine passende KDE-Plasma-Installation. "
@@ -2540,6 +2643,24 @@ class MainWindow(QMainWindow):
                     self._attempted_installs.add(tuple(native["command"]))
                     self._start_share(NativeInstallWorker(screen_profile(), Path(value), QStyleFactory.keys(), native), "share_installing")
                     return
+            if community.get("command"):
+                dialog = QMessageBox(self)
+                dialog.setWindowTitle(APP_NAME)
+                dialog.setIcon(QMessageBox.Icon.Question)
+                source_name = ("Fedora-COPR-Pakete" if community.get("kind") == "fedora_copr"
+                               else "AUR-Gemeinschaftspakete")
+                dialog.setText("Die fehlenden Erweiterungen sind als " + source_name + " verfügbar:\n\n"
+                               + "\n".join(community["packages"]) + "\n\nJetzt im Terminal installieren?")
+                dialog.setInformativeText("Im Terminal bestätigst du die Pakete und gibst dein Passwort ein. Danach wird automatisch weitergeprüft.")
+                dialog.setDetailedText("Befehl: " + shlex.join(community["command"])
+                                       + "\n\nQuellen:\n" + "\n".join(community["urls"])
+                                       + "\n\n" + "\n".join(community["notes"]))
+                dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                dialog.setDefaultButton(QMessageBox.StandardButton.No)
+                if dialog.exec() == QMessageBox.StandardButton.Yes:
+                    self._attempted_installs.add(tuple(community["command"]))
+                    self._start_terminal_install_and_recheck(community, Path(value))
+                    return
             if details.get("plan"):
                 question = ("Für das Design fehlt der Oberflächenstil " + details["plan"][1]
                             + ". Jetzt installieren?\n\nNach der Installation wird automatisch weitergeprüft.")
@@ -2569,8 +2690,12 @@ class MainWindow(QMainWindow):
                 dialog = QMessageBox(self)
                 dialog.setWindowTitle(APP_NAME)
                 dialog.setIcon(QMessageBox.Icon.Warning)
-                dialog.setText("Einige benötigte Erweiterungen konnten in den eingerichteten Paketquellen nicht eindeutig gefunden werden.")
-                dialog.setInformativeText("Unter „Details“ steht, welche Komponente fehlt. Es wurden keine Design-Einstellungen geändert.")
+                guidance = [*native.get("notes", []), *community.get("notes", [])]
+                if community.get("manual_command"):
+                    guidance.append("Terminal-Befehl: " + community["manual_command"])
+                dialog.setText("Einige benötigte Erweiterungen konnten nicht automatisch installiert werden."
+                               + (("\n\nSo gehst du weiter:\n" + "\n".join(guidance)) if guidance else ""))
+                dialog.setInformativeText("Unter „Details“ stehen die Komponentennamen. Es wurden keine Design-Einstellungen geändert.")
                 dialog.setDetailedText(message)
                 dialog.setStandardButtons(QMessageBox.StandardButton.Close)
                 dialog.exec()
@@ -2595,6 +2720,21 @@ class MainWindow(QMainWindow):
                                       styles=QStyleFactory.keys(), recheck=True), "share_download"))
         self.action_process.errorOccurred.connect(lambda *_: self._screen_settings_failed())
         self.action_process.start(executable, ["kcm_kscreen"])
+
+    def _start_terminal_install_and_recheck(self, plan: dict, archive: Path):
+        self._set_busy(True)
+        self.action_process = QProcess(self)
+        self.action_process.finished.connect(
+            lambda *_: self._start_share(ShareWorker(screen_profile(), dest=archive,
+                                      styles=QStyleFactory.keys(), recheck=True), "share_download"))
+        self.action_process.errorOccurred.connect(lambda *_: self._terminal_install_failed(plan))
+        self.action_process.start(plan["terminal"], ["--separate", "-e", *plan["command"]])
+
+    def _terminal_install_failed(self, plan: dict):
+        self._set_busy(False)
+        QMessageBox.warning(self, APP_NAME,
+                            "Das Installationsterminal konnte nicht geöffnet werden. Führe diesen Befehl aus:\n\n"
+                            + shlex.join(plan["command"]))
 
     def _screen_settings_failed(self):
         self._set_busy(False)

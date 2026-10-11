@@ -10,14 +10,16 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.7.2** · [Changelog](#changelog)
+**Current version: 1.7.3** · [Changelog](#changelog)
 
-**New in 1.7.2:** dependency installation is offered even when the monitor layout
-still differs; installed native KWin effects are also detected from their plugin
-files. Technical blocker popups were replaced with action-oriented installation
-dialogs and an **Open display settings** action that automatically rechecks after
-the display module closes. Version 1.7.1 added compiled Plasma widget detection,
-automatic package rechecking and expanded font-family export.
+**New in 1.7.3:** known community-only components now get an actionable,
+distribution-specific installation path. Arch derivatives can install Klassy and
+Glass through an existing `yay`/`paru`. Fedora uses the confirmed Klassy and
+Glass COPR repositories through `dnf` and never offers AUR. The user confirms
+third-party sources and enters the password in a visible terminal; the import is
+automatically checked afterwards. If this is unavailable, an exact command or
+upstream installation page is displayed. Version 1.7.2 added action-oriented
+dependency and display dialogs.
 System preparation is experimental:
 full graphical guest-system installation tests are still pending.
 
@@ -63,7 +65,13 @@ package installation, the retained archive is automatically rechecked and the ne
 available installation is offered. Repeated installation attempts are stopped. If a
 new Plasma login is needed, reopen the app afterwards to resume the saved import.
 Compiled Plasma applets are detected in Qt plugin directories and missing providers
-are looked up in the same distribution file indexes. No AUR/COPR/PPA sources or build scripts are added. The Kvantum
+are looked up in the same distribution file indexes. Known community components
+have explicit, separate routes: Arch derivatives may offer AUR packages `klassy`
+and `kwin-effects-glass-git` through an existing `yay`/`paru`; Fedora may offer
+`klassy` and `kwin-effects-glass` from their confirmed COPR repositories through
+`dnf`. Fedora never receives AUR commands. Adding these community sources requires
+explicit confirmation in a visible terminal. No arbitrary PPA or unknown build
+script is selected. The Kvantum
 mapping remains available. Nonstandard filenames, unindexed packages, native
 binaries inside theme payloads and undeclared dependencies may still require
 manual setup. This is not an arbitrary-plugin installer.

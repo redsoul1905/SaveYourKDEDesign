@@ -1,4 +1,25 @@
-# SaveYourKDEDesign 1.7.2
+# SaveYourKDEDesign 1.7.3
+
+- Replace the unhelpful “no verified repository provider” result for Klassy and
+  Glass with a concrete, distribution-specific installation proposal.
+- Arch/CachyOS/Manjaro: verify and offer AUR packages `klassy` and
+  `kwin-effects-glass-git` through an installed `yay` or `paru`.
+- Fedora: use `dnf` with the confirmed `errornointernet/klassy` and
+  `ama1470/kwin-effects-glass` COPR repositories. Fedora never receives AUR
+  commands. Both package sources were resolved in an isolated Fedora 44 test.
+- Run community installation in a visible terminal so the user can inspect the
+  packages, confirm the source and enter the administrator password.
+- Automatically recheck the retained design after the terminal closes.
+- If automatic installation is unavailable, show exact commands or upstream
+  installation pages in the main message instead of only internal identifiers.
+- Ubuntu/Debian keep their own route: official Klassy OBS packages and the
+  Plasma-version-specific upstream Glass build instructions.
+
+Community repositories and AUR build recipes are not part of the base
+distribution and require explicit consent. A failed or cancelled command does
+not apply design settings; the next check provides a manual instruction.
+
+## Previous release: 1.7.2
 
 - Search for and offer required KDE extension packages even while the target
   monitor layout differs from the exported layout.
