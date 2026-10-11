@@ -10,10 +10,12 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.7.0** · [Changelog](#changelog)
+**Current version: 1.7.1** · [Changelog](#changelog)
 
-**New in 1.7.0:** SaveYourKDEDesign branding, large-icon-theme export fixes and
-repository-based native KWin lookup. System preparation is experimental:
+**New in 1.7.1:** compiled Plasma widget detection and package lookup, order-independent
+monitor comparison, automatic rechecking after package installation, and expanded
+font-family export including installed styles and widget/GTK font selections.
+System preparation is experimental:
 full graphical guest-system installation tests are still pending.
 
 ### KDE setup during import (experimental)
@@ -37,8 +39,8 @@ add repositories, or downgrade Plasma. Fedora Atomic/Silverblue/Kinoite is
 detected and excluded from this package-install path. Unknown distributions
 receive guidance rather than a guessed installation command.
 
-After KDE installation, log out, select Plasma and import the same code again.
-The last import code is remembered. No design settings are applied from a GNOME
+After KDE installation, log out, select Plasma and reopen the app. The saved import
+resumes automatically, downloading and verifying the code again. No design settings are applied from a GNOME
 session, even if KDE packages are already installed. Package installations are
 not covered by the design-file rollback. A failed transaction can have partially
 installed packages; use the system package manager to inspect/recover it.
@@ -53,13 +55,17 @@ compatibility are not fully resolved. Missing native KWin effects/decorations
 are looked up by scoped Qt/KWin plugin filenames in target repositories using
 apt-file, dnf repoquery or pacman's file database. Unique providers can be
 installed after preview and confirmation. Ambiguous/missing providers are not
-guessed. File indexes can be prepared separately with consent; re-import after
-preparation. After native installation log into Plasma again and re-import for
-verification. No AUR/COPR/PPA sources or build scripts are added. The Kvantum
+guessed. File indexes can be prepared separately with consent. After index or native
+package installation, the retained archive is automatically rechecked and the next
+available installation is offered. Repeated installation attempts are stopped. If a
+new Plasma login is needed, reopen the app afterwards to resume the saved import.
+Compiled Plasma applets are detected in Qt plugin directories and missing providers
+are looked up in the same distribution file indexes. No AUR/COPR/PPA sources or build scripts are added. The Kvantum
 mapping remains available. Nonstandard filenames, unindexed packages, native
 binaries inside theme payloads and undeclared dependencies may still require
 manual setup. This is not an arbitrary-plugin installer.
-Exact Plasma/session/screen checks still apply. This is not yet a universal
+Exact Plasma/session/screen geometry checks still apply; monitor enumeration order
+alone is not a mismatch. This is not yet a universal
 one-click clone across arbitrary KDE releases or screen layouts.
 
 Validation: offline mocked Ubuntu/Fedora/Arch repositories and administrator

@@ -46,7 +46,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -607,7 +607,7 @@ TRANSLATIONS["en"].update({
     "share_code": "Paste the complete SDD1 export code:",
     "share_ready": "Uploaded. Copy this code to share the design. Keep the complete code, including its checksum.",
     "share_review": "The downloaded package has passed the file and checksum checks. Themes and widgets may contain executable code. Only apply designs from authors you trust. Your current settings will be backed up first. Full visual identity cannot be verified automatically.",
-    "share_blocked": "This design cannot currently be applied faithfully. No design settings have been changed. Resolve these differences first:\n\n",
+    "share_blocked": "Import checks found remaining differences. Available automatic installations are offered next. No design settings have been changed:\n\n",
     "share_apply": "Apply this design?", "share_error": "Sharing failed",
     "share_complete": "Design files applied. Log out and back in to load the panel layout and themes. Check the result before sharing it further; identical rendering has not been verified.",
     "share_details": "Package contents", "share_omitted": "Not exported",
@@ -615,7 +615,7 @@ TRANSLATIONS["en"].update({
     "share_installing": "Installing the missing theme engine …",
     "share_desktop_install": "Install the KDE desktop system-wide now? This can download many packages and take a long time. Administrator authentication is required. Your existing desktop is retained. No distribution upgrade is performed.",
     "share_desktop_working": "Installing KDE. Do not shut down or interrupt the package manager …",
-    "share_desktop_done": "KDE packages installed. No design settings have been applied yet. Log out, select Plasma at the login screen, then import the same code again. Your last import code is saved in the input field. Remaining version, session and screen differences will be checked again.",
+    "share_desktop_done": "KDE packages installed. Log out, select Plasma at the login screen and reopen this app. The import resumes automatically without entering the code again. No design settings have been applied yet.",
     "share_extensions": "Bundled extensions will replace local copies with the exported version (including older versions). Declared minimum Plasma versions are checked; undeclared dependencies and runtime compatibility cannot be verified automatically.",
 })
 TRANSLATIONS["de"].update({
@@ -630,7 +630,7 @@ TRANSLATIONS["de"].update({
     "share_code": "Vollständigen SDD1-Export-Code einfügen:",
     "share_ready": "Hochgeladen. Diesen Code zum Teilen kopieren. Den vollständigen Code einschließlich Prüfsumme behalten.",
     "share_review": "Dateien und Prüfsumme des Downloads wurden geprüft. Themes und Widgets können ausführbaren Code enthalten. Wende nur Designs vertrauenswürdiger Autoren an. Deine bisherigen Einstellungen werden zuerst gesichert. Eine identische Darstellung lässt sich nicht automatisch bestätigen.",
-    "share_blocked": "Dieses Design kann derzeit nicht originalgetreu angewendet werden. Die Design-Einstellungen wurden nicht geändert. Behebe zunächst diese Unterschiede:\n\n",
+    "share_blocked": "Die Import-Prüfung hat noch Unterschiede gefunden. Verfügbare automatische Installationen werden anschließend angeboten. Noch keine Design-Einstellungen geändert:\n\n",
     "share_apply": "Dieses Design anwenden?", "share_error": "Teilen fehlgeschlagen",
     "share_complete": "Design-Dateien übernommen. Bitte ab- und wieder anmelden, damit Panel-Layout und Themes geladen werden. Prüfe das Ergebnis; eine identische Darstellung wurde nicht bestätigt.",
     "share_details": "Paketinhalt", "share_omitted": "Nicht exportiert",
@@ -638,7 +638,7 @@ TRANSLATIONS["de"].update({
     "share_installing": "Fehlende Theme-Engine wird installiert …",
     "share_desktop_install": "KDE jetzt systemweit zusätzlich installieren? Dies kann viele Pakete herunterladen und lange dauern. Administrator-Anmeldung erforderlich. Die vorhandene Oberfläche bleibt erhalten. Kein Distributions-Upgrade.",
     "share_desktop_working": "KDE wird installiert. Nicht herunterfahren oder die Paketverwaltung unterbrechen …",
-    "share_desktop_done": "KDE-Pakete installiert. Noch keine Design-Einstellungen übernommen. Bitte abmelden, am Anmeldebildschirm Plasma auswählen und denselben Code erneut importieren. Der letzte Import-Code ist im Eingabefeld gespeichert. Version, Sitzung und Bildschirmunterschiede werden erneut geprüft.",
+    "share_desktop_done": "KDE-Pakete installiert. Bitte abmelden, am Anmeldebildschirm Plasma auswählen und dieses Programm wieder öffnen. Der Import wird automatisch fortgesetzt; der Code muss nicht erneut eingegeben werden. Noch keine Design-Einstellungen übernommen.",
     "share_extensions": "Mitgelieferte Erweiterungen ersetzen lokale Kopien durch die exportierte Version (auch ältere Versionen). Angegebene Plasma-Mindestversionen werden geprüft; nicht angegebene Abhängigkeiten und die Laufzeit-Kompatibilität lassen sich nicht automatisch bestätigen.",
 })
 
@@ -949,6 +949,19 @@ def _safe_asset_name(name: str) -> bool:
     return bool(name and re.fullmatch(r"[\w .+@#-]+", name) and name not in (".", ".."))
 
 
+def selected_font_files(family: str) -> list[Path]:
+    """Include every installed style of an exact family, never a silent fallback."""
+    output = _run_cmd(["fc-list", "--format", "%{family}\t%{file}\n"], 15) or ""
+    found = set()
+    for line in output.splitlines():
+        names, sep, filename = line.partition("\t")
+        if sep and family.casefold() in {n.strip().casefold() for n in names.split(",")}:
+            path = Path(filename)
+            if path.is_file():
+                found.add(path)
+    return sorted(found)
+
+
 def public_design(stage: Path, screens: list[dict], log=lambda message: None) -> dict:
     """Build a visual-only tree, never a copy of the user's private backup."""
     home = stage / "home"
@@ -958,6 +971,7 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None) ->
     copied_bytes = 0
     copied_count = 0
     seen = set()
+    exported_fonts = set()
 
     def copy_asset(src: Path, rel: str, allowed_root: Path):
         nonlocal copied_bytes, copied_count
@@ -1073,13 +1087,18 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None) ->
                     asset("icons", value)
                 elif key == "widgetStyle":
                     requirements.append({"kind": "style", "name": value})
-                elif key in {"font", "fixed", "menuFont", "smallestReadableFont", "toolBarFont", "activeFont"}:
-                    font = _run_cmd(["fc-match", "-f", "%{file}", value.split(",")[0]], 10)
-                    if font and Path(font).is_file():
-                        fp = Path(font)
+            if key in {"font", "fixed", "menuFont", "smallestReadableFont", "toolBarFont",
+                       "activeFont", "fontFamily", "gtk-font-name"}:
+                family = value.split(",")[0].strip()
+                if key == "gtk-font-name":
+                    family = re.sub(r"\s+\d+(?:\.\d+)?$", "", family)
+                if family and family not in exported_fonts:
+                    exported_fonts.add(family)
+                    fonts = selected_font_files(family)
+                    for fp in fonts:
                         copy_asset(fp, ".local/share/fonts/sdd/" + sha256_file(fp)[:16] + fp.suffix, fp.parent)
-                    else:
-                        requirements.append({"kind": "font", "name": value.split(",")[0]})
+                    if not fonts:
+                        requirements.append({"kind": "font", "name": family})
             if filename == "kcminputrc" and key == "cursorTheme":
                 asset("icons", value)
             if filename.startswith("gtk-"):
@@ -1285,13 +1304,34 @@ def inspect_public_archive(path: Path) -> dict:
         return manifest
 
 
+def profile_value(profile: dict, key: str):
+    value = profile.get(key)
+    if key == "screens" and isinstance(value, list):
+        return sorted(value, key=lambda row: tuple(row.get(k, 0) for k in
+                      ("x", "y", "width", "height", "scale")))
+    return value
+
+
+def matching_profile(source: dict, current: dict) -> bool:
+    return all(profile_value(source, k) and profile_value(source, k) == profile_value(current, k)
+               for k in ("plasma", "session", "screens"))
+
+
+def plugin_roots(current: dict):
+    major = "5" if current.get("plasma", "").startswith("5.") else "6"
+    return [Path(p.format(major=major)) for p in (
+        "/usr/lib/qt{major}/plugins", "/usr/lib64/qt{major}/plugins",
+        "/usr/lib/x86_64-linux-gnu/qt{major}/plugins",
+        "/usr/lib/aarch64-linux-gnu/qt{major}/plugins")]
+
+
 def compatibility_issues(manifest: dict, current: dict, styles: list[str]) -> list[str]:
     source = manifest["profile"]
     issues = []
     if "desktop" in current and "kde" not in current["desktop"].lower().split(":"):
         issues.append("Please log into a KDE Plasma session / Bitte in KDE Plasma anmelden")
     for key in ("plasma", "session", "screens"):
-        if not source.get(key) or not current.get(key) or source[key] != current[key]:
+        if not source.get(key) or not current.get(key) or profile_value(source, key) != profile_value(current, key):
             issues.append(f"{key}: {source.get(key)} → {current.get(key)}")
     effects = None
     for req in manifest["requirements"]:
@@ -1300,7 +1340,15 @@ def compatibility_issues(manifest: dict, current: dict, styles: list[str]) -> li
             if any((root / name).exists() for root in
                    (HOME / ".local/share", Path("/usr/local/share"), Path("/usr/share"))):
                 continue
+            if name.startswith("plasma/plasmoids/"):
+                plugin = name.removeprefix("plasma/plasmoids/")
+                if _safe_asset_name(plugin) and any(
+                        (root / "plasma/applets" / (plugin + ".so")).is_file()
+                        for root in plugin_roots(current)):
+                    continue
         if kind == "style" and name.lower() in {s.lower() for s in styles}:
+            continue
+        if kind == "font" and selected_font_files(name):
             continue
         if kind == "effect":
             if effects is None:
@@ -1312,10 +1360,14 @@ def compatibility_issues(manifest: dict, current: dict, styles: list[str]) -> li
                         break
             if name in {line.strip() for line in effects.splitlines()}:
                 continue
+            # Older configs may retain a redundant pre-KWin-6 key. Only ignore
+            # it when the design also explicitly requires its available successor.
+            successor = name.removeprefix("kwin4_effect_")
+            if (successor != name and successor in effects.splitlines()
+                    and {"kind": "effect", "name": successor} in manifest["requirements"]):
+                continue
         if kind == "decoration" and _safe_asset_name(name):
-            major = "5" if current.get("plasma", "").startswith("5.") else "6"
-            roots = [Path(p.format(major=major)) for p in ("/usr/lib/qt{major}/plugins", "/usr/lib64/qt{major}/plugins",
-                     "/usr/lib/x86_64-linux-gnu/qt{major}/plugins", "/usr/lib/aarch64-linux-gnu/qt{major}/plugins")]
+            roots = plugin_roots(current)
             filenames = [name + ".so", name.rsplit(".", 1)[-1] + "decoration.so"]
             if any((root / folder / filename).is_file()
                    for root in roots for folder in ("org.kde.kdecoration3", "org.kde.kdecoration2") for filename in filenames):
@@ -1484,8 +1536,7 @@ def native_extension_plan(manifest: dict, current: dict, styles: list[str], issu
     be replaced with a guessed package or an untrusted build script.
     """
     result = {"command": None, "notes": [], "providers": []}
-    if any(not current.get(k) or current[k] != manifest["profile"].get(k)
-           for k in ("plasma", "session", "screens")) or not shutil.which("pkexec"):
+    if not matching_profile(manifest["profile"], current) or not shutil.which("pkexec"):
         return result
     if Path("/run/ostree-booted").exists():
         return result
@@ -1499,7 +1550,8 @@ def native_extension_plan(manifest: dict, current: dict, styles: list[str], issu
     manager = {"ubuntu": "apt-get", "debian": "apt-get", "fedora": "dnf", "arch": "pacman"}.get(distro)
     if not manager or not shutil.which(manager):
         return result
-    requested = [r for r in manifest["requirements"] if r["kind"] in ("effect", "decoration")
+    requested = [r for r in manifest["requirements"] if (r["kind"] in ("effect", "decoration")
+                 or (r["kind"] == "asset" and r["name"].startswith("plasma/plasmoids/")))
                  and r["kind"] + ": " + r["name"] in issues]
     if not requested:
         return result
@@ -1520,10 +1572,15 @@ def native_extension_plan(manifest: dict, current: dict, styles: list[str], issu
     packages = set()
     for req in requested[:32]:
         name = req["name"]
+        if req["kind"] == "asset":
+            name = name.removeprefix("plasma/plasmoids/")
         if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,159}", name):
             result["notes"].append("Invalid native plugin identifier")
             continue
-        if req["kind"] == "decoration":
+        if req["kind"] == "asset":
+            folders = ["plasma/applets"]
+            files = [name + ".so"]
+        elif req["kind"] == "decoration":
             folders = ["org.kde.kdecoration2", "org.kde.kdecoration3"]
             files = [name + ".so", name.rsplit(".", 1)[-1] + "decoration.so"]
         else:
@@ -1570,8 +1627,7 @@ def design_install_plan(manifest: dict, current: dict, styles: list[str]):
     Plasma 5 and unknown native effects require manual setup. Installing a
     different desktop version/repository is outside the design import.
     """
-    if any(not current.get(k) or manifest["profile"].get(k) != current[k]
-           for k in ("plasma", "session", "screens")):
+    if not matching_profile(manifest["profile"], current):
         return None
     if not current["plasma"].startswith("6.") or not shutil.which("pkexec"):
         return None
@@ -1645,15 +1701,17 @@ class ShareWorker(QThread):
     ready = pyqtSignal(str, object)
     failed = pyqtSignal(str)
 
-    def __init__(self, screens, code="", dest=None, styles=None):
+    def __init__(self, screens, code="", dest=None, styles=None, recheck=False):
         super().__init__()
         self.screens, self.code, self.dest = screens, code, dest
         self.styles = styles or []
+        self.recheck = recheck
 
     def run(self):
         try:
             if self.dest is not None:
-                download_design(self.code, self.dest, self.progress.emit)
+                if not self.recheck:
+                    download_design(self.code, self.dest, self.progress.emit)
                 manifest = inspect_public_archive(self.dest)
                 current = desktop_profile(self.screens)
                 issues = compatibility_issues(manifest, current, self.styles)
@@ -1674,7 +1732,7 @@ class ShareWorker(QThread):
                         native["command"] = None
                         native["notes"].append(str(error))
                 self.ready.emit(str(self.dest), {"manifest": manifest, "issues": issues,
-                                "setup": setup, "extensions": extensions, "native": native,
+                                "setup": setup, "extensions": extensions, "native": native, "styles": self.styles,
                                 "plan": design_install_plan(manifest, current, self.styles)})
             else:
                 with tempfile.TemporaryDirectory(prefix="sdd-share-") as tmp:
@@ -1782,18 +1840,15 @@ class DesignInstallWorker(ShareWorker):
             if not executable:
                 raise ValueError("Package manager is unavailable")
             result = subprocess.run([shutil.which("pkexec"), executable, *command[1:]],
-                                    capture_output=True, text=True, timeout=900)
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True)
             if result.returncode:
                 raise ValueError("Package installation failed or was cancelled:\n" + result.stderr[-4000:])
             # Discover plugins in a fresh process; Qt caches style factories.
             output = _run_cmd([sys.executable, "-c",
                               "import json; from PyQt6.QtWidgets import QStyleFactory; print(json.dumps(QStyleFactory.keys()))"], 15)
             styles = json.loads(output) if output else self.styles
-            issues = compatibility_issues(manifest, desktop_profile(self.screens), styles)
-            extensions, extension_issues = extension_preflight(self.dest, desktop_profile(self.screens))
-            issues.extend(extension_issues)
-            self.ready.emit(str(self.dest), {"manifest": manifest, "issues": issues,
-                                            "plan": None, "styles": styles, "extensions": extensions})
+            self.styles, self.recheck = styles, True
+            ShareWorker.run(self)
         except Exception as error:
             self.failed.emit(f"{type(error).__name__}: {error}")
 
@@ -2201,11 +2256,14 @@ class MainWindow(QMainWindow):
         self.silent_worker = None
         self.share_worker = None
         self.share_temp = None
+        self._attempted_installs = set()
         self._public_restore = False
         self._last_share_code = self.settings.value("last_share_code", "", type=str)
         self._latest_tag = ""        # zuletzt von GitHub gemeldeter Tag
         self._build_ui()
-        if self.settings.value("check_updates_on_start", True, type=bool):
+        if self.settings.value("resume_import_after_login", False, type=bool):
+            QTimer.singleShot(500, self._resume_import)
+        elif self.settings.value("check_updates_on_start", True, type=bool):
             # Still: ändert nur die Versionsanzeige, öffnet nie einen Dialog.
             QTimer.singleShot(1500, self._silent_check)
 
@@ -2341,16 +2399,28 @@ class MainWindow(QMainWindow):
             self._share_failed("Invalid SDD1 code / Ungültiger SDD1-Code")
             return
         self.settings.setValue("last_import_code", code.strip())
+        self._download_import(code.strip())
+
+    def _resume_import(self):
+        self.settings.setValue("resume_import_after_login", False)
+        code = self.settings.value("last_import_code", "", type=str)
+        if CODE_RE.fullmatch(code) and not self._worker_running():
+            self._download_import(code)
+
+    def _download_import(self, code):
+        self.settings.setValue("resume_import_after_login", False)
+        self._attempted_installs.clear()
         self._clean_share_temp()
         self.share_temp = tempfile.TemporaryDirectory(prefix="sdd-download-")
         dest = Path(self.share_temp.name) / "design.sdd"
-        self._start_share(ShareWorker(screen_profile(), code.strip(), dest,
+        self._start_share(ShareWorker(screen_profile(), code, dest,
                                       QStyleFactory.keys()), "share_download")
 
     def _start_share(self, worker, message):
         self._set_busy(True)
         self.share_progress.setValue(0)
-        self.share_log.clear()
+        if not worker.recheck and not isinstance(worker, (NativeInstallWorker, DesktopSetupWorker, DesignInstallWorker)):
+            self.share_log.clear()
         self.share_log.append(T(message))
         self.share_worker = worker
         worker.log.connect(self.share_log.append)
@@ -2380,23 +2450,29 @@ class MainWindow(QMainWindow):
             self.share_progress.setValue(100)
             return
         if details.get("desktop_installed"):
+            self.settings.setValue("resume_import_after_login", True)
             message = T("share_desktop_done")
             self.share_log.append(message)
             QMessageBox.information(self, APP_NAME, message)
             self._clean_share_temp()
             return
         if details.get("native_installed"):
-            message = ("Dateiindex vorbereitet. Denselben Code erneut importieren. / File index prepared. Import the same code again."
-                       if details.get("prepare_index") else
-                       "Native Pakete installiert. Bitte ab- und wieder in Plasma anmelden, dann denselben Code erneut importieren. Die Erweiterungen werden erneut geprüft; noch keine Design-Einstellungen übernommen. / Native packages installed. Log into Plasma again and re-import the code for verification; no design settings applied yet.")
-            self.share_log.append(message)
-            QMessageBox.information(self, APP_NAME, message)
-            self._clean_share_temp()
+            self._start_share(ShareWorker(screen_profile(), dest=Path(value),
+                              styles=QStyleFactory.keys(), recheck=True), "share_download")
             return
         for row in details.get("extensions", []):
             self.share_log.append(row)
         setup = details.get("setup", {})
         native = details.get("native", {})
+        if details.get("plan") and tuple(details["plan"][3]) in self._attempted_installs:
+            details["plan"] = None
+        if native.get("command") and tuple(native["command"]) in self._attempted_installs:
+            self.settings.setValue("resume_import_after_login", True)
+            native["command"] = None
+            native.setdefault("notes", []).append(
+                "Die Installation wurde bereits ausgeführt, aber die Komponente ist noch nicht verfügbar. "
+                "Bitte nach einem neuen Plasma-Login dieses Programm öffnen: Der Import wird automatisch fortgesetzt. / "
+                "After a new Plasma login, reopen this app to resume the import automatically.")
         for note in setup.get("notes", []):
             self.share_log.append(note)
         if details["issues"]:
@@ -2428,6 +2504,7 @@ class MainWindow(QMainWindow):
                 dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                 dialog.setDefaultButton(QMessageBox.StandardButton.No)
                 if dialog.exec() == QMessageBox.StandardButton.Yes:
+                    self._attempted_installs.add(tuple(native["command"]))
                     self._start_share(NativeInstallWorker(screen_profile(), Path(value), QStyleFactory.keys(), native), "share_installing")
                     return
             if details.get("plan"):
@@ -2436,6 +2513,7 @@ class MainWindow(QMainWindow):
                 if QMessageBox.question(self, APP_NAME, question,
                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                         QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                    self._attempted_installs.add(tuple(details["plan"][3]))
                     self._start_share(DesignInstallWorker(screen_profile(), dest=Path(value),
                                                           styles=QStyleFactory.keys()), "share_installing")
                     return

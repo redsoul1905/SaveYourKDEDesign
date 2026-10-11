@@ -1,4 +1,26 @@
-# SaveYourKDEDesign 1.7.0
+# SaveYourKDEDesign 1.7.1
+
+- Detect compiled Plasma applets, including the panel, clock, launcher and tray.
+- Compare monitor geometry independently of enumeration order. Actual resolution,
+  position and scaling differences still block faithful import.
+- Look up missing compiled applet packages in configured Ubuntu/Fedora/Arch
+  repositories, alongside KWin effects and decorations.
+- Automatically recheck the retained design after file-index/native installation
+  and offer the next available installation. No repeated code entry is required.
+- When a new Plasma login is required, reopen the app to resume automatically.
+  Administrator consent and final design review remain required.
+- Ignore redundant old effect requirements only when the design also explicitly
+  requires the available successor.
+- Export all installed styles of exact selected font families, including widget
+  and GTK font settings, using anonymized filenames.
+
+Unavailable/ambiguous providers still cannot be installed automatically. No
+unverified installers, new repositories, AUR builds or distribution upgrades.
+Font redistribution requires appropriate licenses. Full graphical cross-distro
+installation/login/restore tests remain pending; identical appearance across
+arbitrary Plasma versions or hardware is not guaranteed.
+
+## Previous release: 1.7.0
 
 Previously SaveDesktopDesign. Old codes, settings, rollback files and the old
 launcher remain compatible. In-app updates migrate the installed menu label.
@@ -23,8 +45,8 @@ Recipients need 1.7.0 for large packages; old export codes remain supported.
 - Display bundled widget/KWin versions and declared Plasma minimums.
 - Find native KWin effect/decoration packages by Qt plugin filenames in target
   repositories. Install unique providers after preview and confirmation.
-- Prepare apt-file/file indexes separately with consent. Re-import after index
-  preparation; log into Plasma again after plugin installation and re-import.
+- Prepare apt-file/file indexes separately with consent. Version 1.7.1 adds
+  automatic rechecking after preparation and native installation.
 - No automatic distribution upgrades, new repositories, AUR builds, arbitrary
   build scripts or copying of native binaries.
 
