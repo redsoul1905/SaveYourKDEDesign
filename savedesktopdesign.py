@@ -1536,7 +1536,10 @@ def native_extension_plan(manifest: dict, current: dict, styles: list[str], issu
             output = _run_cmd(["pacman", "-Fqx", pattern], 45) or ""
         else:
             globs = ["*/qt" + major + "/plugins/" + folder + "/" + file for folder in folders for file in files]
-            output = _run_cmd(["dnf", "repoquery", "--available", "--qf", "%{name}\\n", "--whatprovides", *globs], 60) or ""
+            # --whatprovides consumes one filter; extra positional patterns
+            # would constrain package names instead of adding file alternatives.
+            output = "\n".join(_run_cmd(["dnf", "repoquery", "--available", "--qf", "%{name}\\n",
+                                          "--whatprovides", glob], 60) or "" for glob in globs)
         candidates = set()
         for line in output.splitlines():
             package = line.strip()

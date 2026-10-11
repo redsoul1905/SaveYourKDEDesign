@@ -32,7 +32,10 @@ class NativeTests(unittest.TestCase):
     def test_effect_lookup_is_qt_and_plugin_directory_scoped(self):
         result, query = self.plan("fedora", "round-corners\n", "roundcorners", "effect")
         self.assertEqual(result["command"][-1], "round-corners")
-        self.assertIn("*/qt6/plugins/kwin/effects/plugins/kwin_effect_roundcorners.so", query.call_args.args[0])
+        self.assertTrue(any("*/qt6/plugins/kwin/effects/plugins/kwin_effect_roundcorners.so" in call.args[0]
+                            for call in query.call_args_list))
+        self.assertTrue(all(call.args[0].index("--whatprovides") == len(call.args[0]) - 2
+                            for call in query.call_args_list))
 
     def test_unknown_or_ambiguous_providers_not_installed(self):
         for output in ("", "one\ntwo\n"):

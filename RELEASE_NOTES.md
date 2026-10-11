@@ -2,8 +2,8 @@
 
 Previously SaveDesktopDesign. Old codes, settings, rollback files and the old
 launcher remain compatible. In-app updates migrate the installed menu label.
-The GitHub address remains unchanged until its owner completes the repository
-rename; updates include a fallback during the transition.
+The GitHub repository is now redsoul1905/SaveYourKDEDesign; compatibility with
+the old update address is retained.
 
 ## Tela-dark export fix
 

@@ -7,8 +7,8 @@ The preferred launcher is now `saveyourkdedesign`.
 In-app updates also migrate the standard installed menu label on next startup;
 custom launchers and development checkouts are left alone. The old settings
 namespace remains in use, preserving language preferences and saved codes.
-The intended GitHub name is `redsoul1905/SaveYourKDEDesign`; until the repository
-rename is completed, updates fall back to `redsoul1905/Savedesktopdesign`.
+GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
+repository address is retained for existing installations.
 
 **Current version: 1.7.0** · [Changelog](#changelog)
 
@@ -119,7 +119,7 @@ sudo dnf install git python3 python3-pyqt6
 
 Then:
 ```bash
-git clone https://github.com/redsoul1905/Savedesktopdesign.git SaveYourKDEDesign
+git clone https://github.com/redsoul1905/SaveYourKDEDesign.git
 cd SaveYourKDEDesign
 ./install.sh
 ```
