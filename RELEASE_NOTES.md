@@ -1,4 +1,4 @@
-# SaveYourKDEDesign 1.7.5
+# SaveYourKDEDesign 1.7.6
 
 - Fix public imports for systems where a visual configuration directory such as
   `~/.config/gtk-3.0` is managed by a symlink into a dotfiles directory inside
@@ -21,6 +21,7 @@
 Validation includes safe relative and absolute in-home destinations, external
 destinations, link loops, rollback data behind links, legacy KWin metadata,
 metadata-ID/folder-name differences, malformed bundles and the full test suite.
+The suite is also verified in an isolated Python 3.10 environment.
 
 ## Previous release: 1.7.4
 

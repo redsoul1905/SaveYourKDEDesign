@@ -47,7 +47,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.7.5"
+VERSION = "1.7.6"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -1021,12 +1021,13 @@ def extension_package(root: Path, base: str, plugin_id: str) -> Path | None:
     if direct.exists():
         return direct
     try:
-        children = parent.iterdir()
+        # Path.iterdir() is lazy on Python 3.10/3.12: a missing directory can
+        # raise while iterating rather than when the iterator is constructed.
+        for child in parent.iterdir():
+            if child.is_dir() and extension_package_info(child).get("id") == plugin_id:
+                return child
     except OSError:
         return None
-    for child in children:
-        if child.is_dir() and extension_package_info(child).get("id") == plugin_id:
-            return child
     return None
 
 

@@ -10,9 +10,9 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.7.5** · [Changelog](#changelog)
+**Current version: 1.7.6** · [Changelog](#changelog)
 
-**New in 1.7.5:** public imports now work with safe dotfile-manager links such as
+**New in 1.7.6:** public imports now work with safe dotfile-manager links such as
 `~/.config/gtk-3.0` pointing into the same user home, while links outside the
 home and link loops remain blocked. KWin scripts/effects are discovered by their
 declared plugin ID, including legacy packages, and bundled components are clearly
@@ -288,7 +288,7 @@ cd ~/SaveYourKDEDesign && ./install.sh --update
 
 ## Changelog
 
-### v1.7.5
+### v1.7.6
 
 - Safe in-home dotfile symlinks are preserved during public import and their
   actual contents are covered by rollback; external and cyclic links are rejected.
