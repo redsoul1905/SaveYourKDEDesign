@@ -1,29 +1,40 @@
-# SaveDesktopDesign 1.6.0 — Catbox sharing
+# SaveYourKDEDesign 1.7.0
 
-Share a KDE design using a reusable code: create the public package, upload it
-directly to Catbox, copy the code, and import it on another PC. Neither a Catbox
-account nor an online source PC is needed to download an existing package.
+Previously SaveDesktopDesign. Old codes, settings, rollback files and the old
+launcher remain compatible. In-app updates migrate the installed menu label.
+The GitHub address remains unchanged until its owner completes the repository
+rename; updates include a fallback during the transition.
 
-The new Share design tab includes automatic upload/download, SHA-256 verification,
-strict archive validation and a compatibility review before applying settings.
-Public exports contain selected visual settings and assets, separately from full
-private backups. The latest successful code is remembered.
+## Tela-dark export fix
 
-Kvantum's Qt 6 engine can be installed through the target system's package manager
-on Arch, Debian/Ubuntu and Fedora, with administrator authentication. Other missing
-native components stop import and are reported. The importer requires matching
-Plasma version, session type and screen geometry/scaling. It does not guarantee
-pixel-identical appearance across machines or automatically resolve every native
-extension. Unknown/private settings are omitted from public packages.
+The former 50,000-file limit rejected legitimate themes. The consistent
+export/import limit is now 200,000 files and a separately limited 16 MB manifest.
+Design data remains capped at 1 GB unpacked and 200 MB uploaded. Overrides count
+once; errors distinguish file counts from size. The hicolor application-icon
+fallback is supplied by the target instead of publishing source application
+icons and external links. A local Tela-dark export with inherited themes passed:
+108,973 files, a 7.4 MB manifest and a 35.8 MB package. Nothing was uploaded.
+Recipients need 1.7.0 for large packages; old export codes remain supported.
 
-Catbox permits packages up to 200 MB. Anonymous files currently expire after two
-years without access; hosting availability is not guaranteed. Keep local backups.
-Only publish assets you may redistribute and only import from trusted authors:
-KDE theme/widget code may run when loaded, even after archive validation.
+## System preparation (experimental)
 
-Private restore extraction has also been hardened. Unsafe external/absolute links
-are rejected, and rollback or file-copy errors stop restoration.
+- Preview and confirm KDE installation on Ubuntu, Fedora and Arch.
+- Check available Plasma versions and suggest system updates.
+- Display bundled widget/KWin versions and declared Plasma minimums.
+- Find native KWin effect/decoration packages by Qt plugin filenames in target
+  repositories. Install unique providers after preview and confirmation.
+- Prepare apt-file/file indexes separately with consent. Re-import after index
+  preparation; log into Plasma again after plugin installation and re-import.
+- No automatic distribution upgrades, new repositories, AUR builds, arbitrary
+  build scripts or copying of native binaries.
 
-Validation: offline transfer/security/GUI and backup/rollback tests, plus a real
-Catbox upload/download/checksum round trip using a tiny synthetic fixture. Full
-visual equivalence across real Arch, Kubuntu and Fedora desktops has not been tested.
+Not every native extension is automatically installable. Unavailable or ambiguous
+providers, nonstandard filenames, undeclared dependencies and mismatched
+Plasma/session/screens still block faithful import. System packages are not
+undone by design rollback and can partially install if a transaction fails.
+
+Validation: automated archive, transfer, GUI, rename/update, package-plan and
+large-theme regression tests; actual KDE package resolution in isolated Ubuntu
+24.04/26.04 and Fedora 44 containers. Full graphical installation/login/restore
+and pixel-identical appearance have not been verified across these systems.
+Only import trusted designs: themes and widgets may execute code.

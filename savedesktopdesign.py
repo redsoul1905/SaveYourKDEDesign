@@ -46,7 +46,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.7.0-dev"
+VERSION = "1.7.0"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -850,6 +850,8 @@ CATBOX_API = "https://catbox.moe/user/api.php"
 CATBOX_FILES = "https://files.catbox.moe/"
 SHARE_LIMIT = 200_000_000
 EXPANDED_LIMIT = 1_000_000_000
+SHARE_FILE_LIMIT = 200_000  # Tela-dark plus inherited Breeze has over 108k paths.
+MANIFEST_LIMIT = 16_000_000
 CODE_RE = re.compile(r"SDD1:([a-zA-Z0-9]{6,16}\.sdd):([0-9a-f]{64})\Z")
 HOME_TOKEN = "@SDD_HOME@"
 VISUAL_CONFIGS = {
@@ -975,16 +977,21 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None) ->
             seen.remove(real)
         elif real.is_file():
             size = real.stat().st_size
-            if copied_bytes + size > EXPANDED_LIMIT or copied_count >= 50000:
-                raise ValueError("Design exceeds the unpacked size/file limit")
+            dst = home / rel
+            previous_size = dst.stat().st_size if rel in paths else 0
+            next_bytes = copied_bytes - previous_size + size
+            next_count = copied_count + (rel not in paths)
+            if next_bytes > EXPANDED_LIMIT:
+                raise ValueError(f"Design zu groß / too large unpacked: {next_bytes:,} bytes; limit {EXPANDED_LIMIT:,}. Asset: {rel}")
+            if next_count > SHARE_FILE_LIMIT:
+                raise ValueError(f"Zu viele Design-Dateien / too many design files: {next_count:,}; limit {SHARE_FILE_LIMIT:,}. Asset: {rel}")
             with real.open("rb") as stream:
                 if stream.read(4) == b"\x7fELF":
                     raise ValueError(f"Compiled plugin needs installation on the target: {src.name}")
-            dst = home / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(real, dst)
-            copied_bytes += size
-            copied_count += 1
+            copied_bytes = next_bytes
+            copied_count = next_count
             paths.add(rel)
         else:
             raise ValueError(f"Unsupported asset type: {src.name}")
@@ -996,6 +1003,12 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None) ->
             return
         added.add((base, name))
         rel = base + "/" + name
+        if base == "icons" and name == "hicolor":
+            # This fallback also contains icons owned by installed applications,
+            # often linked outside the theme tree. Keep it supplied by the target
+            # distribution instead of exporting the source's application icons.
+            requirements.append({"kind": "asset", "name": rel})
+            return
         candidates = [root / rel for root in sources]
         if base == "icons":
             candidates.insert(1, HOME / ".icons" / name)
@@ -1225,14 +1238,15 @@ def inspect_public_archive(path: Path) -> dict:
         manifest = None
         for member in archive:
             count += 1
-            total += member.size
-            if count > 50000 or total > EXPANDED_LIMIT:
+            if member.name != "manifest.json":
+                total += member.size
+            if count > SHARE_FILE_LIMIT + 1 or total > EXPANDED_LIMIT:
                 raise ValueError("Archive exceeds the unpacked size/file limit")
             if member.name in names or not member.isfile():
                 raise ValueError("Design archives must contain unique regular files only")
             names.add(member.name)
             if member.name == "manifest.json":
-                if member.size > 4_000_000:
+                if member.size > MANIFEST_LIMIT:
                     raise ValueError("Manifest too large")
                 manifest = json.load(archive.extractfile(member))
             elif member.name.startswith("home/") and share_path_allowed(member.name[5:]):
@@ -1302,8 +1316,9 @@ def compatibility_issues(manifest: dict, current: dict, styles: list[str]) -> li
             major = "5" if current.get("plasma", "").startswith("5.") else "6"
             roots = [Path(p.format(major=major)) for p in ("/usr/lib/qt{major}/plugins", "/usr/lib64/qt{major}/plugins",
                      "/usr/lib/x86_64-linux-gnu/qt{major}/plugins", "/usr/lib/aarch64-linux-gnu/qt{major}/plugins")]
-            if any((root / folder / (name + ".so")).is_file()
-                   for root in roots for folder in ("org.kde.kdecoration3", "org.kde.kdecoration2")):
+            filenames = [name + ".so", name.rsplit(".", 1)[-1] + "decoration.so"]
+            if any((root / folder / filename).is_file()
+                   for root in roots for folder in ("org.kde.kdecoration3", "org.kde.kdecoration2") for filename in filenames):
                 continue
         issues.append(kind + ": " + name)
     return issues
@@ -1436,6 +1451,8 @@ def extension_preflight(path: Path, current: dict):
 
 def desktop_transaction_preview(command: list[str]) -> str:
     """Ask the native solver without elevation or any package installation."""
+    if command == ["pacman", "-Fy"]:
+        return "Nur Dateiindex der konfigurierten Paketquellen aktualisieren; keine Pakete installieren. / Refresh repository file indexes only; no packages installed."
     manager = command[0]
     args = [arg for arg in command if arg not in ("-y", "--noconfirm")]
     if manager == "apt-get":
@@ -1458,6 +1475,90 @@ def desktop_transaction_preview(command: list[str]) -> str:
     # Preserve the transaction summary and tail of the package list in the UI.
     prefix = "[Auszug: letzte 12000 Zeichen / Excerpt: last 12000 characters]\n" if len(output) > 12000 else ""
     return prefix + output[-12000:]
+
+
+def native_extension_plan(manifest: dict, current: dict, styles: list[str], issues: list[str]):
+    """Resolve providers from this machine's repositories, never source package names.
+
+    File indexes are required on apt/pacman. A missing/ambiguous provider cannot
+    be replaced with a guessed package or an untrusted build script.
+    """
+    result = {"command": None, "notes": [], "providers": []}
+    if any(not current.get(k) or current[k] != manifest["profile"].get(k)
+           for k in ("plasma", "session", "screens")) or not shutil.which("pkexec"):
+        return result
+    if Path("/run/ostree-booted").exists():
+        return result
+    try:
+        system = platform.freedesktop_os_release()
+    except OSError:
+        return result
+    distro = system.get("ID", "")
+    if "arch" in system.get("ID_LIKE", "").split():
+        distro = "arch"
+    manager = {"ubuntu": "apt-get", "debian": "apt-get", "fedora": "dnf", "arch": "pacman"}.get(distro)
+    if not manager or not shutil.which(manager):
+        return result
+    requested = [r for r in manifest["requirements"] if r["kind"] in ("effect", "decoration")
+                 and r["kind"] + ": " + r["name"] in issues]
+    if not requested:
+        return result
+    if manager == "apt-get" and (not shutil.which("apt-file") or not any(Path("/var/lib/apt/lists").glob("*Contents*"))):
+        result["notes"].append("Zuerst apt-file installieren und Paket-/Dateiindizes aktualisieren; danach Code erneut prüfen / First install apt-file and refresh repository/file indexes, then check the code again.")
+        result["command"] = ["apt-get", "install", "--no-remove", "-y", "apt-file"]
+        result["prepare_index"] = "apt"
+        return result
+    if manager == "pacman" and not any(Path("/var/lib/pacman/sync").glob("*.files")):
+        result["command"] = ["pacman", "-Fy"]
+        result["prepare_index"] = "pacman"
+        result["notes"].append("Zuerst Paket-Dateiindex aktualisieren, danach Code erneut prüfen / Refresh the repository file index first, then check the code again.")
+        return result
+    if manager == "pacman" and _run_cmd(["pacman", "-Qu"], 30):
+        result["notes"].append("Arch: zuerst alle Systemupdates installieren / Complete system updates first.")
+        return result
+    major = str(plasma_version(current["plasma"])[0])
+    packages = set()
+    for req in requested[:32]:
+        name = req["name"]
+        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,159}", name):
+            result["notes"].append("Invalid native plugin identifier")
+            continue
+        if req["kind"] == "decoration":
+            folders = ["org.kde.kdecoration2", "org.kde.kdecoration3"]
+            files = [name + ".so", name.rsplit(".", 1)[-1] + "decoration.so"]
+        else:
+            folders = ["kwin/effects/plugins", "kwin-x11/effects/plugins"]
+            files = [name + ".so", "kwin_effect_" + name + ".so", "kwin4_effect_" + name + ".so"]
+        pattern = r"/qt" + major + r"/plugins/(" + "|".join(re.escape(f) for f in folders) + r")/(" + "|".join(re.escape(f) for f in files) + r")$"
+        if manager == "apt-get":
+            output = _run_cmd(["apt-file", "search", "--package-only", "--regexp", pattern], 45) or ""
+        elif manager == "pacman":
+            output = _run_cmd(["pacman", "-Fqx", pattern], 45) or ""
+        else:
+            globs = ["*/qt" + major + "/plugins/" + folder + "/" + file for folder in folders for file in files]
+            output = _run_cmd(["dnf", "repoquery", "--available", "--qf", "%{name}\\n", "--whatprovides", *globs], 60) or ""
+        candidates = set()
+        for line in output.splitlines():
+            package = line.strip()
+            if manager == "pacman" and package.count("/") == 1:
+                package = package.split("/", 1)[1]
+            if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9+_.-]{0,159}", package):
+                candidates.add(package)
+        if len(candidates) == 1:
+            package = candidates.pop()
+            packages.add(package)
+            result["providers"].append(f"{req['kind']}: {name} → {package}")
+        else:
+            result["notes"].append(f"{name}: " + ("multiple providers / mehrere Anbieter: " + ", ".join(sorted(candidates))
+                                                 if candidates else "no verified repository provider / kein bestätigtes Paket (Dateiindex prüfen)."))
+    if len(requested) > 32:
+        result["notes"].append("Only the first 32 native requirements were queried.")
+    if packages:
+        prefix = {"apt-get": ["apt-get", "install", "--no-remove", "-y"],
+                  "dnf": ["dnf", "install", "-y"],
+                  "pacman": ["pacman", "-S", "--needed", "--noconfirm"]}[manager]
+        result["command"] = prefix + sorted(packages)
+    return result
 
 
 def design_install_plan(manifest: dict, current: dict, styles: list[str]):
@@ -1503,7 +1604,7 @@ def safe_extract(archive: tarfile.TarFile, destination: Path):
             raise ValueError("Unsafe or duplicate archive path")
         names.add(name)
         total += member.size
-        if len(names) > 100000 or total > 4_000_000_000:
+        if len(names) > SHARE_FILE_LIMIT + 1 or total > 4_000_000_000:
             raise ValueError("Archive exceeds extraction limits")
         target = destination / name
         if member.isdir():
@@ -1562,8 +1663,15 @@ class ShareWorker(QThread):
                     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
                         setup["command"] = None
                         setup["notes"].append(str(error))
+                native = native_extension_plan(manifest, current, self.styles, issues)
+                if native.get("command"):
+                    try:
+                        native["preview"] = desktop_transaction_preview(native["command"])
+                    except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+                        native["command"] = None
+                        native["notes"].append(str(error))
                 self.ready.emit(str(self.dest), {"manifest": manifest, "issues": issues,
-                                "setup": setup, "extensions": extensions,
+                                "setup": setup, "extensions": extensions, "native": native,
                                 "plan": design_install_plan(manifest, current, self.styles)})
             else:
                 with tempfile.TemporaryDirectory(prefix="sdd-share-") as tmp:
@@ -1617,6 +1725,40 @@ class DesktopSetupWorker(ShareWorker):
             if not desktop_profile(self.screens).get("plasma"):
                 raise ValueError("Package transaction finished, but Plasma was not detected. Check the system package manager.")
             self.ready.emit(str(self.dest), {"manifest": manifest, "desktop_installed": True})
+        except Exception as error:
+            self.failed.emit(f"{type(error).__name__}: {error}")
+
+
+class NativeInstallWorker(ShareWorker):
+    def __init__(self, screens, dest, styles, approved):
+        super().__init__(screens, dest=dest, styles=styles)
+        self.approved = approved
+
+    def run(self):
+        try:
+            manifest = inspect_public_archive(self.dest)
+            current = desktop_profile(self.screens)
+            issues = compatibility_issues(manifest, current, self.styles)
+            plan = native_extension_plan(manifest, current, self.styles, issues)
+            if not plan["command"] or any(plan[k] != self.approved.get(k) for k in ("command", "providers")):
+                raise ValueError("Native package providers changed. Review the import again.")
+            executable, auth = shutil.which(plan["command"][0]), shutil.which("pkexec")
+            if not executable or not auth:
+                raise ValueError("Package manager or administrator authentication missing")
+            args = [auth, executable, *plan["command"][1:]]
+            if plan["command"][0] == "apt-get":
+                args = [auth, "/usr/bin/env", "DEBIAN_FRONTEND=noninteractive", executable, *plan["command"][1:]]
+            self.log.emit(shlex.join(plan["command"]))
+            result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+            if result.returncode:
+                raise ValueError("Native package installation failed/cancelled; packages may have changed.\n" + result.stderr[-4000:])
+            if plan.get("prepare_index") == "apt":
+                result = subprocess.run([auth, executable, "update"], stdin=subprocess.DEVNULL,
+                                        capture_output=True, text=True)
+                if result.returncode:
+                    raise ValueError("File index refresh failed; apt-file may already be installed.\n" + result.stderr[-4000:])
+            self.ready.emit(str(self.dest), {"manifest": manifest, "native_installed": True,
+                                            "prepare_index": bool(plan.get("prepare_index"))})
         except Exception as error:
             self.failed.emit(f"{type(error).__name__}: {error}")
 
@@ -2240,15 +2382,26 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, APP_NAME, message)
             self._clean_share_temp()
             return
+        if details.get("native_installed"):
+            message = ("Dateiindex vorbereitet. Denselben Code erneut importieren. / File index prepared. Import the same code again."
+                       if details.get("prepare_index") else
+                       "Native Pakete installiert. Bitte ab- und wieder in Plasma anmelden, dann denselben Code erneut importieren. Die Erweiterungen werden erneut geprüft; noch keine Design-Einstellungen übernommen. / Native packages installed. Log into Plasma again and re-import the code for verification; no design settings applied yet.")
+            self.share_log.append(message)
+            QMessageBox.information(self, APP_NAME, message)
+            self._clean_share_temp()
+            return
         for row in details.get("extensions", []):
             self.share_log.append(row)
         setup = details.get("setup", {})
+        native = details.get("native", {})
         for note in setup.get("notes", []):
             self.share_log.append(note)
         if details["issues"]:
             message = T("share_blocked") + "\n".join(details["issues"])
             if setup.get("notes"):
                 message += "\n\n" + "\n".join(setup["notes"])
+            if native.get("notes"):
+                message += "\n\n" + "\n".join(native["notes"])
             self.share_log.append(message)
             if setup.get("command"):
                 question = message + "\n\n" + T("share_desktop_install") + "\n" + shlex.join(setup["command"])
@@ -2261,6 +2414,18 @@ class MainWindow(QMainWindow):
                 dialog.setDefaultButton(QMessageBox.StandardButton.No)
                 if dialog.exec() == QMessageBox.StandardButton.Yes:
                     self._start_share(DesktopSetupWorker(screen_profile(), Path(value), setup), "share_desktop_working")
+                    return
+            if native.get("command"):
+                dialog = QMessageBox(self)
+                dialog.setWindowTitle(APP_NAME)
+                dialog.setText(message + "\n\nNative Pakete nachinstallieren? / Install native packages?\n"
+                               + "\n".join(native["providers"]) + "\n" + shlex.join(native["command"])
+                               + "\nSystempakete sind nicht Teil des Design-Rollbacks / System packages are not covered by design rollback.")
+                dialog.setDetailedText(native.get("preview", ""))
+                dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                dialog.setDefaultButton(QMessageBox.StandardButton.No)
+                if dialog.exec() == QMessageBox.StandardButton.Yes:
+                    self._start_share(NativeInstallWorker(screen_profile(), Path(value), QStyleFactory.keys(), native), "share_installing")
                     return
             if details.get("plan"):
                 question = (message + "\n\n" + T("share_install")

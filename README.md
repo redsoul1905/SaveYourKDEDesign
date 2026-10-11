@@ -10,12 +10,13 @@ namespace remains in use, preserving language preferences and saved codes.
 The intended GitHub name is `redsoul1905/SaveYourKDEDesign`; until the repository
 rename is completed, updates fall back to `redsoul1905/Savedesktopdesign`.
 
-**Current version: 1.6.0** · [Changelog](#changelog)
+**Current version: 1.7.0** · [Changelog](#changelog)
 
-**Development branch: 1.7.0-dev — cross-distribution KDE setup.** Not yet a
-released update; real guest-system installation tests are still required.
+**New in 1.7.0:** SaveYourKDEDesign branding, large-icon-theme export fixes and
+repository-based native KWin lookup. System preparation is experimental:
+full graphical guest-system installation tests are still pending.
 
-### KDE setup during import (development)
+### KDE setup during import (experimental)
 
 The import preflight can offer to install a missing KDE desktop on Ubuntu,
 regular Fedora, and Arch/Arch-derived systems, after explicit confirmation and
@@ -48,8 +49,16 @@ Plasma minimum versions block incompatible imports, including at the final
 restore check. The bundled version replaces the local version, even if older;
 this preserves the export rather than silently selecting a different latest
 version. Legacy metadata, undeclared QML/native dependencies and runtime API
-compatibility are not fully resolved. Native extension auto-installation remains
-limited to the existing Kvantum mapping; other native requirements still block.
+compatibility are not fully resolved. Missing native KWin effects/decorations
+are looked up by scoped Qt/KWin plugin filenames in target repositories using
+apt-file, dnf repoquery or pacman's file database. Unique providers can be
+installed after preview and confirmation. Ambiguous/missing providers are not
+guessed. File indexes can be prepared separately with consent; re-import after
+preparation. After native installation log into Plasma again and re-import for
+verification. No AUR/COPR/PPA sources or build scripts are added. The Kvantum
+mapping remains available. Nonstandard filenames, unindexed packages, native
+binaries inside theme payloads and undeclared dependencies may still require
+manual setup. This is not an arbitrary-plugin installer.
 Exact Plasma/session/screen checks still apply. This is not yet a universal
 one-click clone across arbitrary KDE releases or screen layouts.
 
@@ -60,7 +69,7 @@ repository checks on 2026-10-10 resolved the installation on Ubuntu 24.04 and
 26.04 (`apt-get --simulate`) and Fedora 44 (`dnf --assumeno`) in disposable
 containers. The offered Plasma versions were 5.27.12, 6.6.6 and 6.7.5 respectively. These are not
 full desktop tests: VM installation/relogin/restore verification is still
-pending before release. Fedora's empty-container plan included about 3 GiB of
+pending. Fedora's empty-container plan included about 3 GiB of
 downloads; actual desktop transactions differ and must be reviewed.
 Package choices follow the [Ubuntu package catalog](https://packages.ubuntu.com/kde-plasma-desktop)
 and [Fedora KDE instructions](https://fedoraproject.org/wiki/KDE).
@@ -126,6 +135,14 @@ python3 savedesktopdesign.py
 ## Usage
 
 ### Share a design with a code (new in 1.6)
+
+**Large icon themes (fixed in 1.7):** up to 200,000 design files and a separately
+bounded 16 MB manifest. Design data remains limited to 1 GB unpacked and 200 MB
+uploaded. Overrides count once. `hicolor` is supplied by the target rather than
+exporting application-owned icons/links. Tela-dark plus inherited themes was
+tested locally: 108,973 files, a 7.4 MB manifest and a 35.8 MB package passed archive
+validation, without an upload. Recipients must update before importing large
+packages; older codes remain supported in 1.7.0.
 
 1. Open **Share design → Create export code** (Deutsch: **Design teilen → Export-Code erstellen**).
 2. Review the public-upload notice. After confirmation the app builds a separate
