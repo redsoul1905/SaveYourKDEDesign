@@ -12,6 +12,7 @@ Sprachen: Deutsch, English, Français, Italiano, Español, Português, Türkçe
 """
 
 import io
+import configparser
 import hashlib
 import json
 import os
@@ -46,7 +47,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.7.4"
+VERSION = "1.7.5"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -799,7 +800,33 @@ def rollback_path() -> Path:
     return HOME / ".savedesktopdesign-rollback.tar.gz"
 
 
-def make_rollback(rel_paths: list[str], categories: list[str]) -> str:
+def safe_public_restore_target(rel: str) -> Path:
+    """Resolve a public restore destination without escaping the user's HOME."""
+    logical = HOME / rel
+    try:
+        home = HOME.resolve(strict=True)
+        # Resolve the nearest existing component strictly, then append missing
+        # children. This detects symlink loops even on Python versions whose
+        # non-strict resolve leaves a cyclic component unresolved.
+        existing = logical
+        missing = []
+        while not os.path.lexists(existing):
+            if existing == HOME:
+                raise OSError("missing HOME")
+            missing.append(existing.name)
+            existing = existing.parent
+        resolved = existing.resolve(strict=True)
+        for name in reversed(missing):
+            resolved /= name
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"Restore target cannot be resolved safely: {rel}") from exc
+    if resolved != home and not resolved.is_relative_to(home):
+        raise ValueError(f"Restore target leaves the user folder: {rel}")
+    return resolved
+
+
+def make_rollback(rel_paths: list[str], categories: list[str],
+                  dereference: bool = False) -> str:
     """Sichert den aktuellen Zustand genau der Pfade, die gleich
     überschrieben werden. Das Netz unter dem Restore."""
     present = [r for r in rel_paths if os.path.lexists(HOME / r)]
@@ -819,6 +846,9 @@ def make_rollback(rel_paths: list[str], categories: list[str]) -> str:
     dest = rollback_path()
     tmp = dest.with_name(dest.name + ".new")
     with tarfile.open(tmp, "w:gz") as tar:
+        # Public restores may deliberately write through a safe dotfile-manager
+        # link. Back up the data behind that link, not merely the link itself.
+        tar.dereference = dereference
         for rel in present:
             tar.add(HOME / rel, arcname=f"home/{rel}")
         data = json.dumps(manifest, indent=2).encode()
@@ -955,6 +985,49 @@ def share_path_allowed(rel: str) -> bool:
 
 def _safe_asset_name(name: str) -> bool:
     return bool(name and re.fullmatch(r"[\w .+@#-]+", name) and name not in (".", ".."))
+
+
+def extension_package_info(package: Path) -> dict[str, str]:
+    """Read a KPackage identity from current JSON or legacy desktop metadata."""
+    metadata = package / "metadata.json"
+    if metadata.is_file() and metadata.stat().st_size <= 256000:
+        try:
+            data = json.loads(metadata.read_text(encoding="utf-8"))
+            plugin = data.get("KPlugin", {})
+            if isinstance(data, dict) and isinstance(plugin, dict):
+                return {"id": str(plugin.get("Id", "")),
+                        "version": str(plugin.get("Version", "unknown")),
+                        "minimum": str(data.get("X-Plasma-API-Minimum-Version", ""))}
+        except (OSError, UnicodeError, ValueError, AttributeError):
+            pass
+    legacy = package / "metadata.desktop"
+    if legacy.is_file() and legacy.stat().st_size <= 256000:
+        parser = configparser.ConfigParser(interpolation=None, strict=False)
+        try:
+            parser.read(legacy, encoding="utf-8")
+            entry = parser["Desktop Entry"]
+            return {"id": entry.get("X-KDE-PluginInfo-Name", ""),
+                    "version": entry.get("X-KDE-PluginInfo-Version", "unknown"),
+                    "minimum": entry.get("X-Plasma-API-Minimum-Version", "")}
+        except (OSError, UnicodeError, configparser.Error, KeyError):
+            pass
+    return {}
+
+
+def extension_package(root: Path, base: str, plugin_id: str) -> Path | None:
+    """Find a package by metadata ID; directory names are not authoritative."""
+    parent = root / base
+    direct = parent / plugin_id
+    if direct.exists():
+        return direct
+    try:
+        children = parent.iterdir()
+    except OSError:
+        return None
+    for child in children:
+        if child.is_dir() and extension_package_info(child).get("id") == plugin_id:
+            return child
+    return None
 
 
 def primary_layout_values(values: list[tuple[str, str, str]], primary: int):
@@ -1128,7 +1201,11 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
             # distribution instead of exporting the source's application icons.
             requirements.append({"kind": "asset", "name": rel})
             return
-        candidates = [root / rel for root in sources]
+        if base in {"kwin/scripts", "kwin/effects"}:
+            candidates = [candidate for root in sources
+                          if (candidate := extension_package(root, base, name)) is not None]
+        else:
+            candidates = [root / rel for root in sources]
         if base == "icons":
             candidates.insert(1, HOME / ".icons" / name)
         if base == "themes":
@@ -1229,7 +1306,7 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                 # already be installed in a compatible build on the target.
                 available = False
                 for base in ("kwin/scripts", "kwin/effects"):
-                    if any((root / base / effect).exists() for root in sources):
+                    if any(extension_package(root, base, effect) is not None for root in sources):
                         asset(base, effect)
                         available = True
                 if not available:
@@ -1604,33 +1681,62 @@ def extension_preflight(path: Path, current: dict):
     rows, issues = [], []
     prefixes = ("plasma/plasmoids", "plasma/wallpapers", "kwin/scripts", "kwin/effects")
     with tarfile.open(path, "r:gz") as archive:
-        for member in archive:
+        packages = {}
+        for member in archive.getmembers():
             rel = member.name.removeprefix("home/.local/share/")
             base = next((p for p in prefixes if rel.startswith(p + "/")), None)
-            if not base or not rel.endswith("/metadata.json") or rel.count("/") != base.count("/") + 2:
+            if not base:
+                continue
+            rest = rel[len(base) + 1:].split("/")
+            if len(rest) >= 2 and rest[0]:
+                packages.setdefault((base, rest[0]), {})["has_files"] = True
+            if len(rest) != 2 or rest[1] not in {"metadata.json", "metadata.desktop"}:
                 continue
             if member.size > 256000 or not member.isfile():
                 raise ValueError("Invalid extension metadata")
-            data = json.load(archive.extractfile(member))
-            if not isinstance(data, dict) or not isinstance(data.get("KPlugin", {}), dict):
-                raise ValueError("Invalid extension metadata")
-            name = rel[len(base) + 1:].split("/")[0]
-            version = str(data.get("KPlugin", {}).get("Version", "unknown"))[:80]
-            minimum = str(data.get("X-Plasma-API-Minimum-Version", ""))
-            local_version = "not installed / nicht installiert"
+            raw = archive.extractfile(member).read()
+            try:
+                if rest[1] == "metadata.json":
+                    data = json.loads(raw.decode("utf-8"))
+                    plugin = data.get("KPlugin", {})
+                    if not isinstance(data, dict) or not isinstance(plugin, dict):
+                        raise ValueError
+                    info = {"id": str(plugin.get("Id", "")),
+                            "version": str(plugin.get("Version", "unknown")),
+                            "minimum": str(data.get("X-Plasma-API-Minimum-Version", ""))}
+                    packages[(base, rest[0])]["json"] = info
+                else:
+                    parser = configparser.ConfigParser(interpolation=None, strict=False)
+                    parser.read_string(raw.decode("utf-8"))
+                    entry = parser["Desktop Entry"]
+                    packages[(base, rest[0])]["desktop"] = {
+                        "id": entry.get("X-KDE-PluginInfo-Name", ""),
+                        "version": entry.get("X-KDE-PluginInfo-Version", "unknown"),
+                        "minimum": entry.get("X-Plasma-API-Minimum-Version", "")}
+            except (UnicodeError, ValueError, AttributeError, configparser.Error, KeyError) as exc:
+                raise ValueError("Invalid extension metadata") from exc
+
+        seen_ids = set()
+        for (base, folder), metadata in sorted(packages.items()):
+            info = metadata.get("json") or metadata.get("desktop")
+            if not info:
+                raise ValueError(f"Bundled extension has no valid metadata: {base}/{folder}")
+            plugin_id = info.get("id") or folder
+            if not _safe_asset_name(plugin_id) or (base, plugin_id) in seen_ids:
+                raise ValueError(f"Invalid or duplicate extension identity: {base}/{folder}")
+            seen_ids.add((base, plugin_id))
+            version = str(info.get("version", "unknown"))[:80]
+            minimum = str(info.get("minimum", ""))
+            local_version = "wird installiert / will be installed"
             for root in (HOME / ".local/share", Path("/usr/local/share"), Path("/usr/share")):
-                local = root / rel
-                if local.is_file():
-                    try:
-                        if local.stat().st_size <= 256000:
-                            local_version = str(json.loads(local.read_text()).get("KPlugin", {}).get("Version", "unknown"))[:80]
-                    except (ValueError, OSError, AttributeError):
-                        local_version = "unknown"
+                local = extension_package(root, base, plugin_id)
+                if local is not None:
+                    local_version = extension_package_info(local).get("version", "unknown")[:80]
                     break
-            rows.append(f"{base}/{name}: {local_version} → {version} (bundled / mitgeliefert)")
+            rows.append(f"{base}/{plugin_id}: {local_version} → {version} (im Design enthalten)")
             if minimum and (not plasma_version(minimum) or not plasma_version(current.get("plasma", ""))
                             or plasma_version(current["plasma"]) < plasma_version(minimum)):
-                issues.append(f"{name}: Plasma minimum / mindestens {minimum[:80]}")
+                issues.append(f"{plugin_id}: Plasma minimum / mindestens {minimum[:80]}")
     return rows, issues
 
 
@@ -2301,17 +2407,19 @@ class RestoreWorker(QThread):
                         wanted.update(CATEGORIES.get(cat, []))
                     rel_paths = [r for r in rel_paths if r in wanted]
 
-                # No writes through existing directory symlinks in the target
-                # home. Check before creating the rollback, too.
+                # Resolve every public destination before rollback or writes.
+                # Safe dotfile-manager links inside HOME are preserved; links
+                # escaping HOME and cycles remain blocked.
                 for rel in rel_paths:
                     target = HOME / rel
-                    if self.public and target.is_symlink() and os.path.isabs(os.readlink(target)):
-                        raise ValueError(f"Cannot safely roll back an absolute target symlink: {rel}")
-                    for parent in target.parents:
-                        if parent == HOME:
-                            break
-                        if parent.is_symlink():
-                            raise ValueError(f"Restore path uses a directory symlink: {rel}")
+                    if self.public:
+                        safe_public_restore_target(rel)
+                    else:
+                        for parent in target.parents:
+                            if parent == HOME:
+                                break
+                            if parent.is_symlink():
+                                raise ValueError(f"Restore path uses a directory symlink: {rel}")
 
                 if self.public:
                     for rel in rel_paths:
@@ -2335,7 +2443,8 @@ class RestoreWorker(QThread):
                     if self.rollback:
                         self.log.emit(T("log_rollback"))
                         saved = make_rollback(rel_paths, self.categories
-                                              or manifest.get("categories", []))
+                                              or manifest.get("categories", []),
+                                              dereference=self.public)
                         if saved:
                             self.log.emit(f"  → {saved}")
 
@@ -2383,6 +2492,16 @@ class RestoreWorker(QThread):
             except (OSError, subprocess.SubprocessError) as e:
                 self.log.emit(f"{T('log_skipped')} fc-cache ({e})")
 
+        # Update KDE's service/package cache before KWin is asked to reload so
+        # newly copied scripts and effects are discoverable immediately.
+        for sycoca in ("kbuildsycoca6", "kbuildsycoca5"):
+            if shutil.which(sycoca):
+                try:
+                    subprocess.run([sycoca], capture_output=True, timeout=120)
+                except (OSError, subprocess.SubprocessError) as e:
+                    self.log.emit(f"{T('log_skipped')} {sycoca} ({e})")
+                break
+
         # KWin & Co. zwingen, die restaurierten Configs sofort zu laden —
         # sonst überschreibt die laufende Sitzung sie beim Abmelden wieder
         self.log.emit(T("log_kwin_reload"))
@@ -2394,17 +2513,10 @@ class RestoreWorker(QThread):
                 except (OSError, subprocess.SubprocessError) as e:
                     self.log.emit(f"{T('log_skipped')} {qdbus} ({e})")
                 break
-        for sycoca in ("kbuildsycoca6", "kbuildsycoca5"):
-            if shutil.which(sycoca):
-                try:
-                    subprocess.run([sycoca], capture_output=True, timeout=120)
-                except (OSError, subprocess.SubprocessError) as e:
-                    self.log.emit(f"{T('log_skipped')} {sycoca} ({e})")
-                break
 
     def _copy_into_home(self, entry: Path, src_root: Path):
         rel = entry.relative_to(src_root)
-        target = HOME / rel
+        target = safe_public_restore_target(str(rel)) if self.public else HOME / rel
         self.log.emit(f"  → {rel}")
         target.parent.mkdir(parents=True, exist_ok=True)
         self._merge(entry, target)
@@ -2432,9 +2544,12 @@ class RestoreWorker(QThread):
                 for child in src.iterdir():
                     self._merge(child, dst / child.name)
             else:
-                if os.path.lexists(dst):
-                    self._remove_existing(dst)
-                shutil.copy2(src, dst)
+                # Same-directory replace prevents a truncated configuration if
+                # the copy is interrupted. Existing safe symlinks were already
+                # resolved by _copy_into_home and therefore remain intact.
+                tmp = dst.with_name(dst.name + ".syd-new-" + uuid.uuid4().hex)
+                shutil.copy2(src, tmp)
+                os.replace(tmp, dst)
         except OSError as e:
             raise OSError(f"Could not restore {dst}: {e}") from e
 

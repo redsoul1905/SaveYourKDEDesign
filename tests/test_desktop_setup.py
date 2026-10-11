@@ -90,6 +90,24 @@ class DesktopSetupTests(unittest.TestCase):
         self.assertTrue(issues)
         self.assertFalse(app.extension_preflight(path, {**PROFILE, "plasma": "6.6.1"})[1])
 
+    def test_legacy_kwin_metadata_is_supported(self):
+        path = self.root / "design.sdd"
+        rel = ".local/share/kwin/scripts/legacy-folder/metadata.desktop"
+        data = (b"[Desktop Entry]\nX-KDE-PluginInfo-Name=legacy.script\n"
+                b"X-KDE-PluginInfo-Version=2.4\n")
+        archive_file(path, [("home/" + rel, data)], manifest([rel]))
+        rows, issues = app.extension_preflight(path, PROFILE)
+        self.assertEqual(issues, [])
+        self.assertIn("kwin/scripts/legacy.script", rows[0])
+        self.assertIn("wird installiert", rows[0])
+
+    def test_extension_without_metadata_is_rejected_before_restore(self):
+        path = self.root / "design.sdd"
+        rel = ".local/share/kwin/scripts/broken/contents/code/main.js"
+        archive_file(path, [("home/" + rel, b"// no metadata")], manifest([rel]))
+        with self.assertRaises(ValueError):
+            app.extension_preflight(path, PROFILE)
+
     def test_final_restore_blocks_extension_minimum_before_changes(self):
         path = self.root / "design.sdd"
         rel = ".local/share/kwin/scripts/test.script/metadata.json"

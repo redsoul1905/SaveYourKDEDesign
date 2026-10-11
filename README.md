@@ -10,9 +10,14 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.7.4** · [Changelog](#changelog)
+**Current version: 1.7.5** · [Changelog](#changelog)
 
-**New in 1.7.4:** public designs use only the exporting primary screen as the
+**New in 1.7.5:** public imports now work with safe dotfile-manager links such as
+`~/.config/gtk-3.0` pointing into the same user home, while links outside the
+home and link loops remain blocked. KWin scripts/effects are discovered by their
+declared plugin ID, including legacy packages, and bundled components are clearly
+shown as being installed from the design. Restored files are replaced atomically.
+Version 1.7.4 made public designs use only the exporting primary screen as the
 Plasma-layout source. Monitor count, resolution, scale, position and enumeration
 are no longer compared and never block import. On the target, only primary-screen
 containments are replaced; layouts and screen mapping for additional monitors are
@@ -282,6 +287,16 @@ cd ~/SaveYourKDEDesign && ./install.sh --update
 - Optional: `paru`/`yay` for AUR packages, `flatpak`
 
 ## Changelog
+
+### v1.7.5
+
+- Safe in-home dotfile symlinks are preserved during public import and their
+  actual contents are covered by rollback; external and cyclic links are rejected.
+- Portable KWin scripts/effects are matched by plugin metadata ID, not only by
+  folder name, with support for modern and legacy metadata formats.
+- Bundled extensions are validated before any settings change and are labelled
+  as installed from the design instead of incorrectly appearing as missing.
+- Individual restored files use atomic replacement.
 
 ### v1.6.0
 

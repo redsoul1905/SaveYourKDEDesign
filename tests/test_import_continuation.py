@@ -1,5 +1,6 @@
 """Regression tests for compiled Plasma applets and automatic import continuation."""
 import unittest
+import tarfile
 from pathlib import Path
 from unittest.mock import patch, Mock
 import test_sharing as fixtures
@@ -9,6 +10,62 @@ from test_sharing import app, PROFILE, manifest, archive_file
 class ImportContinuationTests(unittest.TestCase):
     setUp = fixtures.SharingTests.setUp
     tearDown = fixtures.SharingTests.tearDown
+
+    def test_safe_internal_dotfile_symlink_is_preserved_and_rolled_back(self):
+        real = self.home / ".dotfiles/gtk-3.0"
+        real.mkdir(parents=True)
+        (real / "settings.ini").write_text("old")
+        config = self.home / ".config"
+        config.mkdir()
+        (config / "gtk-3.0").symlink_to("../.dotfiles/gtk-3.0")
+        rel = ".config/gtk-3.0/settings.ini"
+        path = self.root / "design.sdd"
+        archive_file(path, [("home/" + rel, b"new")], manifest([rel]))
+        worker = app.RestoreWorker(str(path), public=True, screens=PROFILE["screens"])
+        failures = []
+        worker.failed.connect(failures.append)
+        with patch.object(app, "desktop_profile", return_value=PROFILE), \
+                patch.object(app.RestoreWorker, "_post_restore"):
+            worker.run()
+        self.assertEqual(failures, [])
+        self.assertTrue((config / "gtk-3.0").is_symlink())
+        self.assertEqual((real / "settings.ini").read_text(), "new")
+        with tarfile.open(app.rollback_path(), "r:gz") as archive:
+            self.assertEqual(archive.extractfile("home/" + rel).read(), b"old")
+
+    def test_public_restore_rejects_symlink_outside_home_before_writing(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        config = self.home / ".config"
+        config.mkdir()
+        (config / "gtk-3.0").symlink_to(outside)
+        rel = ".config/gtk-3.0/settings.ini"
+        path = self.root / "design.sdd"
+        archive_file(path, [("home/" + rel, b"new")], manifest([rel]))
+        worker = app.RestoreWorker(str(path), public=True, screens=PROFILE["screens"])
+        failures = []
+        worker.failed.connect(failures.append)
+        with patch.object(app, "desktop_profile", return_value=PROFILE):
+            worker.run()
+        self.assertTrue(failures)
+        self.assertFalse((outside / "settings.ini").exists())
+
+    def test_public_restore_rejects_cyclic_target_symlink(self):
+        config = self.home / ".config"
+        config.mkdir()
+        (config / "gtk-3.0").symlink_to("gtk-4.0")
+        (config / "gtk-4.0").symlink_to("gtk-3.0")
+        with self.assertRaises(ValueError):
+            app.safe_public_restore_target(".config/gtk-3.0/settings.ini")
+
+    def test_absolute_symlink_inside_home_is_allowed(self):
+        real = self.home / ".dotfiles/gtk-4.0"
+        real.mkdir(parents=True)
+        config = self.home / ".config"
+        config.mkdir()
+        (config / "gtk-4.0").symlink_to(real)
+        self.assertEqual(app.safe_public_restore_target(".config/gtk-4.0/settings.ini"),
+                         real / "settings.ini")
 
     def test_screens_never_block_primary_design_import(self):
         first = PROFILE["screens"][0]
@@ -150,6 +207,24 @@ foo=bar
         self.assertNotIn("personal", bundled[0])
         self.assertEqual((stage / "home" / bundled[0]).read_bytes(), b"test font")
         self.assertEqual(fonts.call_args.args, ("Example",))
+
+    def test_kwin_script_is_found_by_plugin_id_not_folder_name(self):
+        script = self.home / ".local/share/kwin/scripts/download-folder"
+        (script / "contents/code").mkdir(parents=True)
+        (script / "metadata.json").write_text(
+            '{"KPlugin":{"Id":"real.script.id","Version":"1.2"}}')
+        (script / "contents/code/main.js").write_text("// portable script")
+        config = self.home / ".config/kwinrc"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("[Plugins]\nreal.script.idEnabled=true\n")
+        stage = self.root / "stage"
+        stage.mkdir()
+        with patch.object(app, "desktop_profile", return_value=PROFILE):
+            doc = app.public_design(stage, PROFILE["screens"])
+        target = ".local/share/kwin/scripts/real.script.id/metadata.json"
+        self.assertIn(target, doc["paths"])
+        self.assertEqual(app.extension_package_info(stage / "home/.local/share/kwin/scripts/real.script.id")["id"],
+                         "real.script.id")
 
     def test_resume_consumes_flag_and_downloads_saved_code(self):
         window = Mock()

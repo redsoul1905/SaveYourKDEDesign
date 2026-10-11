@@ -1,4 +1,28 @@
-# SaveYourKDEDesign 1.7.4
+# SaveYourKDEDesign 1.7.5
+
+- Fix public imports for systems where a visual configuration directory such as
+  `~/.config/gtk-3.0` is managed by a symlink into a dotfiles directory inside
+  the same user home. The safe link is preserved and its previous file content
+  is included in the rollback archive.
+- Resolve every destination before the first write. Links outside the user home,
+  broken escapes and symlink loops are still rejected.
+- Write restored files through an atomic same-directory replacement, avoiding a
+  truncated configuration file if a copy is interrupted.
+- Find portable KWin scripts and effects by their declared plugin ID as well as
+  their directory name. This supports packages whose downloaded folder was
+  renamed and other enabled KWin scripts without a hard-coded allowlist.
+- Support both current `metadata.json` and legacy `metadata.desktop` KWin
+  packages. Missing, malformed or duplicate package identities stop the import
+  before any design setting is changed.
+- Replace the misleading “not installed” label for bundled extensions with
+  “will be installed / wird installiert”. Bundled KWin scripts, effects and
+  Plasma widgets are copied from the design and are not repository errors.
+
+Validation includes safe relative and absolute in-home destinations, external
+destinations, link loops, rollback data behind links, legacy KWin metadata,
+metadata-ID/folder-name differences, malformed bundles and the full test suite.
+
+## Previous release: 1.7.4
 
 - Remove monitor count, resolution, scale, position and enumeration from public
   import compatibility checks. Display differences no longer block anything.
