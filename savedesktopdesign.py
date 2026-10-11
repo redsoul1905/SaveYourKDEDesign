@@ -32,7 +32,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QProcess, QSettings, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QIcon, QGuiApplication
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
@@ -46,7 +46,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.7.1"
+VERSION = "1.7.2"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -1317,12 +1317,32 @@ def matching_profile(source: dict, current: dict) -> bool:
                for k in ("plasma", "session", "screens"))
 
 
+def package_profile_compatible(source: dict, current: dict) -> bool:
+    """Display layout/session differences must not prevent dependency repair.
+
+    Applying the design still runs the full compatibility check independently.
+    """
+    return bool(current.get("plasma") and current["plasma"] == source.get("plasma"))
+
+
 def plugin_roots(current: dict):
     major = "5" if current.get("plasma", "").startswith("5.") else "6"
     return [Path(p.format(major=major)) for p in (
         "/usr/lib/qt{major}/plugins", "/usr/lib64/qt{major}/plugins",
         "/usr/lib/x86_64-linux-gnu/qt{major}/plugins",
         "/usr/lib/aarch64-linux-gnu/qt{major}/plugins")]
+
+
+def native_effect_available(name: str, current: dict) -> bool:
+    if not _safe_asset_name(name):
+        return False
+    candidates = {name + ".so", "kwin_effect_" + name + ".so", "kwin4_effect_" + name + ".so"}
+    # A config key such as kwin4_effect_glass may refer to glass.so.
+    candidates.add(name.removeprefix("kwin4_effect_") + ".so")
+    return any((root / folder / filename).is_file()
+               for root in plugin_roots(current)
+               for folder in ("kwin/effects/plugins", "kwin-x11/effects/plugins")
+               for filename in candidates)
 
 
 def compatibility_issues(manifest: dict, current: dict, styles: list[str]) -> list[str]:
@@ -1351,6 +1371,8 @@ def compatibility_issues(manifest: dict, current: dict, styles: list[str]) -> li
         if kind == "font" and selected_font_files(name):
             continue
         if kind == "effect":
+            if native_effect_available(name, current):
+                continue
             if effects is None:
                 effects = ""
                 for command in ("qdbus6", "qdbus", "qdbus-qt6"):
@@ -1536,7 +1558,11 @@ def native_extension_plan(manifest: dict, current: dict, styles: list[str], issu
     be replaced with a guessed package or an untrusted build script.
     """
     result = {"command": None, "notes": [], "providers": []}
-    if not matching_profile(manifest["profile"], current) or not shutil.which("pkexec"):
+    if not package_profile_compatible(manifest["profile"], current):
+        result["notes"].append("Zuerst die Plasma-Version angleichen; die Bildschirm-Anordnung verhindert keine Paketsuche. / Match the Plasma version first; screen layout does not block package lookup.")
+        return result
+    if not shutil.which("pkexec"):
+        result["notes"].append("Administratorfreigabe (pkexec) ist nicht verfügbar. / Administrator authentication (pkexec) is unavailable.")
         return result
     if Path("/run/ostree-booted").exists():
         return result
@@ -1627,7 +1653,7 @@ def design_install_plan(manifest: dict, current: dict, styles: list[str]):
     Plasma 5 and unknown native effects require manual setup. Installing a
     different desktop version/repository is outside the design import.
     """
-    if not matching_profile(manifest["profile"], current):
+    if not package_profile_compatible(manifest["profile"], current):
         return None
     if not current["plasma"].startswith("6.") or not shutil.which("pkexec"):
         return None
@@ -2255,6 +2281,7 @@ class MainWindow(QMainWindow):
         self.update_worker = None
         self.silent_worker = None
         self.share_worker = None
+        self.action_process = None
         self.share_temp = None
         self._attempted_installs = set()
         self._public_restore = False
@@ -2483,11 +2510,15 @@ class MainWindow(QMainWindow):
                 message += "\n\n" + "\n".join(native["notes"])
             self.share_log.append(message)
             if setup.get("command"):
-                question = message + "\n\n" + T("share_desktop_install") + "\n" + shlex.join(setup["command"])
+                question = ("Für dieses Design fehlt eine passende KDE-Plasma-Installation. "
+                            "SaveYourKDEDesign kann die benötigten Pakete jetzt installieren. / "
+                            "This design needs a matching KDE Plasma installation. "
+                            "SaveYourKDEDesign can install the required packages now.")
                 dialog = QMessageBox(self)
                 dialog.setWindowTitle(APP_NAME)
                 dialog.setText(question)
-                dialog.setDetailedText(setup.get("preview", ""))
+                dialog.setDetailedText(message + "\n\n" + shlex.join(setup["command"])
+                                       + "\n\n" + setup.get("preview", ""))
                 dialog.setInformativeText("Paketplan unter Details prüfen / Review the package plan under Details")
                 dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                 dialog.setDefaultButton(QMessageBox.StandardButton.No)
@@ -2497,10 +2528,12 @@ class MainWindow(QMainWindow):
             if native.get("command"):
                 dialog = QMessageBox(self)
                 dialog.setWindowTitle(APP_NAME)
-                dialog.setText(message + "\n\nNative Pakete nachinstallieren? / Install native packages?\n"
-                               + "\n".join(native["providers"]) + "\n" + shlex.join(native["command"])
-                               + "\nSystempakete sind nicht Teil des Design-Rollbacks / System packages are not covered by design rollback.")
-                dialog.setDetailedText(native.get("preview", ""))
+                dialog.setText("Benötigte KDE-Erweiterungen wurden in deinen Paketquellen gefunden. Jetzt installieren? / "
+                               "Required KDE extensions were found in your repositories. Install them now?\n\n"
+                               + ("\n".join(native["providers"]) or "Paket-Dateiindex vorbereiten / Prepare package file index"))
+                dialog.setInformativeText("Nach der Installation prüft das Programm automatisch weiter.")
+                dialog.setDetailedText(message + "\n\n" + shlex.join(native["command"])
+                                       + "\n\n" + native.get("preview", ""))
                 dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                 dialog.setDefaultButton(QMessageBox.StandardButton.No)
                 if dialog.exec() == QMessageBox.StandardButton.Yes:
@@ -2508,8 +2541,8 @@ class MainWindow(QMainWindow):
                     self._start_share(NativeInstallWorker(screen_profile(), Path(value), QStyleFactory.keys(), native), "share_installing")
                     return
             if details.get("plan"):
-                question = (message + "\n\n" + T("share_install")
-                            + "\n" + details["plan"][1])
+                question = ("Für das Design fehlt der Oberflächenstil " + details["plan"][1]
+                            + ". Jetzt installieren?\n\nNach der Installation wird automatisch weitergeprüft.")
                 if QMessageBox.question(self, APP_NAME, question,
                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                         QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
@@ -2517,7 +2550,30 @@ class MainWindow(QMainWindow):
                     self._start_share(DesignInstallWorker(screen_profile(), dest=Path(value),
                                                           styles=QStyleFactory.keys()), "share_installing")
                     return
-            QMessageBox.warning(self, APP_NAME, message)
+            screen_issue = next((row for row in details["issues"] if row.startswith("screens:")), None)
+            other_issues = [row for row in details["issues"] if not row.startswith("screens:")]
+            if screen_issue and not other_issues and shutil.which("kcmshell6"):
+                dialog = QMessageBox(self)
+                dialog.setWindowTitle(APP_NAME)
+                dialog.setIcon(QMessageBox.Icon.Information)
+                dialog.setText("Die benötigten Erweiterungen sind geprüft. Jetzt muss noch die Bildschirm-Anordnung zum Design passen.")
+                dialog.setInformativeText("Öffne die Anzeige-Einstellungen. Sobald du sie schließt, prüft SaveYourKDEDesign automatisch erneut.")
+                open_button = dialog.addButton("Anzeige-Einstellungen öffnen", QMessageBox.ButtonRole.AcceptRole)
+                dialog.addButton(QMessageBox.StandardButton.Cancel)
+                dialog.setDetailedText(message)
+                dialog.exec()
+                if dialog.clickedButton() is open_button:
+                    self._open_screen_settings_and_recheck(Path(value))
+                    return
+            else:
+                dialog = QMessageBox(self)
+                dialog.setWindowTitle(APP_NAME)
+                dialog.setIcon(QMessageBox.Icon.Warning)
+                dialog.setText("Einige benötigte Erweiterungen konnten in den eingerichteten Paketquellen nicht eindeutig gefunden werden.")
+                dialog.setInformativeText("Unter „Details“ steht, welche Komponente fehlt. Es wurden keine Design-Einstellungen geändert.")
+                dialog.setDetailedText(message)
+                dialog.setStandardButtons(QMessageBox.StandardButton.Close)
+                dialog.exec()
             self._clean_share_temp()
             return
         review = T("share_review") + "\n\n" + T("share_extensions") + "\n" + "\n".join(details.get("extensions", [])) + "\n\n" + T("share_apply")
@@ -2527,6 +2583,23 @@ class MainWindow(QMainWindow):
             self._clean_share_temp()
             return
         self._start_restore(value, None, True, public=True, styles=details.get("styles"))
+
+    def _open_screen_settings_and_recheck(self, archive: Path):
+        executable = shutil.which("kcmshell6")
+        if not executable:
+            return
+        self._set_busy(True)
+        self.action_process = QProcess(self)
+        self.action_process.finished.connect(
+            lambda *_: self._start_share(ShareWorker(screen_profile(), dest=archive,
+                                      styles=QStyleFactory.keys(), recheck=True), "share_download"))
+        self.action_process.errorOccurred.connect(lambda *_: self._screen_settings_failed())
+        self.action_process.start(executable, ["kcm_kscreen"])
+
+    def _screen_settings_failed(self):
+        self._set_busy(False)
+        self._clean_share_temp()
+        QMessageBox.warning(self, APP_NAME, "Die Anzeige-Einstellungen konnten nicht geöffnet werden.")
 
     def _clean_share_temp(self):
         if self.share_temp is not None:

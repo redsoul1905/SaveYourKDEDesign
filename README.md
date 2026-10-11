@@ -10,11 +10,14 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.7.1** · [Changelog](#changelog)
+**Current version: 1.7.2** · [Changelog](#changelog)
 
-**New in 1.7.1:** compiled Plasma widget detection and package lookup, order-independent
-monitor comparison, automatic rechecking after package installation, and expanded
-font-family export including installed styles and widget/GTK font selections.
+**New in 1.7.2:** dependency installation is offered even when the monitor layout
+still differs; installed native KWin effects are also detected from their plugin
+files. Technical blocker popups were replaced with action-oriented installation
+dialogs and an **Open display settings** action that automatically rechecks after
+the display module closes. Version 1.7.1 added compiled Plasma widget detection,
+automatic package rechecking and expanded font-family export.
 System preparation is experimental:
 full graphical guest-system installation tests are still pending.
 
@@ -65,7 +68,9 @@ mapping remains available. Nonstandard filenames, unindexed packages, native
 binaries inside theme payloads and undeclared dependencies may still require
 manual setup. This is not an arbitrary-plugin installer.
 Exact Plasma/session/screen geometry checks still apply; monitor enumeration order
-alone is not a mismatch. This is not yet a universal
+alone is not a mismatch. Screen differences no longer suppress dependency lookup.
+When only screen geometry remains, the app opens KDE Display Configuration and
+automatically rechecks after it closes. This is not yet a universal
 one-click clone across arbitrary KDE releases or screen layouts.
 
 Validation: offline mocked Ubuntu/Fedora/Arch repositories and administrator

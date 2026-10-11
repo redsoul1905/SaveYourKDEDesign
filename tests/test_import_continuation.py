@@ -38,7 +38,8 @@ class ImportContinuationTests(unittest.TestCase):
         doc = manifest()
         old = {"kind": "effect", "name": "kwin4_effect_glass"}
         doc["requirements"] = [old, {"kind": "effect", "name": "glass"}]
-        with patch.object(app.shutil, "which", return_value="qdbus6"), patch.object(app, "_run_cmd", return_value="glass\n"):
+        with patch.object(app.shutil, "which", return_value="qdbus6"), patch.object(app, "_run_cmd", return_value="glass\n"), \
+                patch.object(app, "native_effect_available", return_value=False):
             self.assertEqual(app.compatibility_issues(doc, PROFILE, []), [])
             doc["requirements"] = [old]
             self.assertEqual(app.compatibility_issues(doc, PROFILE, []), ["effect: kwin4_effect_glass"])
@@ -128,8 +129,30 @@ class ImportContinuationTests(unittest.TestCase):
         details = {"manifest": manifest(), "issues": ["effect: example"],
                    "native": {"command": command, "notes": [], "providers": []}}
         window._share_outcome = ("/tmp/design.sdd", details)
-        with patch.object(app.QMessageBox, "warning"):
+        dialog = Mock()
+        with patch.object(app, "QMessageBox", return_value=dialog):
             app.MainWindow._share_finished(window)
         window._start_share.assert_not_called()
         window.settings.setValue.assert_called_once_with("resume_import_after_login", True)
         self.assertIsNone(details["native"]["command"])
+
+    def test_screen_mismatch_does_not_block_extension_package_lookup(self):
+        doc = manifest()
+        doc["requirements"] = [{"kind": "effect", "name": "example"}]
+        target = {**PROFILE, "screens": [{**PROFILE["screens"][0], "x": 200}]}
+        with patch.object(app.platform, "freedesktop_os_release", return_value={"ID": "fedora"}), \
+                patch.object(app.shutil, "which", side_effect=lambda n: "/usr/bin/" + n), \
+                patch.object(Path, "exists", return_value=False), \
+                patch.object(app, "_run_cmd", return_value="kwin-effect-example\n"):
+            result = app.native_extension_plan(doc, target, [], ["screens: mismatch", "effect: example"])
+        self.assertEqual(result["command"], ["dnf", "install", "-y", "kwin-effect-example"])
+
+    def test_effect_file_detection_survives_unavailable_dbus(self):
+        root = self.root / "plugins"
+        effect = root / "kwin/effects/plugins/glass.so"
+        effect.parent.mkdir(parents=True)
+        effect.touch()
+        with patch.object(app, "plugin_roots", return_value=[root]):
+            self.assertTrue(app.native_effect_available("glass", PROFILE))
+            self.assertTrue(app.native_effect_available("kwin4_effect_glass", PROFILE))
+            self.assertFalse(app.native_effect_available("missing", PROFILE))

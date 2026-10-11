@@ -1,4 +1,22 @@
-# SaveYourKDEDesign 1.7.1
+# SaveYourKDEDesign 1.7.2
+
+- Search for and offer required KDE extension packages even while the target
+  monitor layout differs from the exported layout.
+- Detect installed native KWin effects by their Qt plugin files when the live
+  KWin DBus interface is unavailable. This fixes false Glass/legacy-Glass errors.
+- Replace the final technical-only blocker popup with action-oriented dialogs.
+  Package actions explain what will happen and keep technical output in Details.
+- When screen geometry is the only remaining difference, offer **Open display
+  settings**. After the KDE display module closes, the retained import is
+  automatically checked again; the code does not need to be entered again.
+- Keep the final compatibility check before applying any design settings.
+
+SaveYourKDEDesign does not silently change monitor geometry: applying a layout
+that does not match connected hardware can make a display or windows unreachable.
+Unavailable or ambiguous repository packages are shown as such and are never
+replaced with unverified install scripts.
+
+## Previous release: 1.7.1
 
 - Detect compiled Plasma applets, including the panel, clock, launcher and tray.
 - Compare monitor geometry independently of enumeration order. Actual resolution,
