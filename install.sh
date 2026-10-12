@@ -38,7 +38,7 @@ if [[ "$1" == "--update" ]]; then
         fi
         TMP_DIR="$(mktemp -d)"
         git clone --depth 1 "$REPO_URL" "$TMP_DIR/repo"
-        cp -f "$TMP_DIR/repo/savedesktopdesign.py" "$TMP_DIR/repo/install.sh" "$SRC_DIR/"
+        cp -f "$TMP_DIR/repo/saveyourkdedesign.py" "$TMP_DIR/repo/install.sh" "$SRC_DIR/"
         chmod +x "$SRC_DIR/install.sh"
         rm -rf "$TMP_DIR"
     fi
@@ -61,12 +61,12 @@ if ! python3 -c "import PyQt6" 2>/dev/null; then
 fi
 
 mkdir -p "$APP_DIR" "$BIN_DIR" "$(dirname "$DESKTOP_FILE")"
-cp "$SRC_DIR/savedesktopdesign.py" "$APP_DIR/"
+cp "$SRC_DIR/saveyourkdedesign.py" "$APP_DIR/"
 
 for launcher in saveyourkdedesign savedesktopdesign; do
 cat > "$BIN_DIR/$launcher" <<EOF
 #!/usr/bin/env bash
-exec python3 "$APP_DIR/savedesktopdesign.py" "\$@"
+exec python3 "$APP_DIR/saveyourkdedesign.py" "\$@"
 EOF
 chmod +x "$BIN_DIR/$launcher"
 done

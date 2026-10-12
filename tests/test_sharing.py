@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-import savedesktopdesign as app
+import saveyourkdedesign as app
 
 
 PROFILE = {"plasma": "6.5.0", "session": "wayland",
@@ -227,7 +227,7 @@ class SharingTests(unittest.TestCase):
         path = self.root / "design.sdd"
         archive_file(path, [("home/.config/kdeglobals", b"[General]\n")], manifest())
         self.assertEqual(app.inspect_public_archive(path)["profile"], PROFILE)
-        for bad in ("home/../../outside", "home/.ssh/authorized_keys", "app/savedesktopdesign.py", "packages/apt-manual.txt"):
+        for bad in ("home/../../outside", "home/.ssh/authorized_keys", "app/saveyourkdedesign.py", "packages/apt-manual.txt"):
             archive_file(path, [(bad, b"bad")], manifest())
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 app.inspect_public_archive(path)

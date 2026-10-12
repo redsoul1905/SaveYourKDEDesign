@@ -1,4 +1,21 @@
-# SaveYourKDEDesign 1.7.7
+# SaveYourKDEDesign 1.7.8
+
+- Rename the primary application file to `saveyourkdedesign.py`. Keep an
+  identical legacy source at `savedesktopdesign.py` so existing in-app updaters
+  continue to work and migrate to the canonical launcher on their next start.
+- Store a privacy-safe panel-fidelity contract in public designs: panel edge,
+  geometry and ordered widget plugin IDs. Verify it after Plasma remaps local
+  containment IDs during import.
+- Report objectively overlapping panels in the export/import log without
+  changing an author's layout. This prevents silent visual surprises while
+  preserving intentional custom panel setups.
+- Embed available wallpaper files in new shared designs and use portable paths
+  on the receiving computer.
+
+Validation: 95 automated offline tests, including panel geometry, widget order,
+legacy updater compatibility and wallpaper portability.
+
+## Previous release: 1.7.7
 
 - Fix the false extraction-limit failure for large private backups. Public
   packages keep their stricter limits; private backups allow 1 million entries

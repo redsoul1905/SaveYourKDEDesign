@@ -1,8 +1,9 @@
 # SaveYourKDEDesign
 
 Formerly **SaveDesktopDesign**. Existing SDD1 codes, settings and rollback files
-remain compatible. The source filename `savedesktopdesign.py`, internal storage
-paths and old launcher are retained deliberately for older installations.
+remain compatible. The primary source file is now `saveyourkdedesign.py`;
+the old filename remains as a compatibility copy so existing installations can
+update without a manual migration.
 The preferred launcher is now `saveyourkdedesign`.
 In-app updates also migrate the standard installed menu label on next startup;
 custom launchers and development checkouts are left alone. The old settings
@@ -10,14 +11,12 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.7.7** · [Changelog](#changelog)
+**Current version: 1.7.8** · [Changelog](#changelog)
 
-**New in 1.7.7:** preserve Panel Colorizer's larger visual settings, panel-view
-geometry and linked system trays during public layout imports. Use Plasma's
-primary-screen numbering instead of Qt's screen enumeration. Private backups
-now embed selected external wallpaper files, and large legacy backups use
-separate extraction limits. Existing archives/codes cannot recover assets or
-settings that were never included: create a new export from the desired desktop.
+**New in 1.7.8:** public designs carry a panel-fidelity contract for panel
+geometry and widget order. Imports verify that contract after Plasma has remapped
+its local IDs. Wallpaper files are embedded in fresh exports, and possible panel
+overlaps are reported without changing an author's intended layout.
 Cross-distribution pixel-identical rendering still needs an actual target-session
 check; offline tests do not verify graphics drivers or third-party plugin behavior.
 
@@ -167,7 +166,7 @@ You'll then find **SaveYourKDEDesign** in your application menu.
 Run directly without installing:
 
 ```bash
-python3 savedesktopdesign.py
+python3 saveyourkdedesign.py
 ```
 
 ## Usage
@@ -256,15 +255,15 @@ Not happy with the result? **Roll back to the state before the last restore** pu
 **The archive carries the app itself**, so a brand-new machine needs neither git nor an install first:
 
 ```bash
-tar xzf plasma-design-2026-09-04.tar.gz app/savedesktopdesign.py
-python3 app/savedesktopdesign.py
+tar xzf plasma-design-2026-09-04.tar.gz app/saveyourkdedesign.py
+python3 app/saveyourkdedesign.py
 ```
 
 ## Update
 
 **From inside the app (v1.4.0 and newer):** click **Check for updates** in the top bar. It queries the latest GitHub release, shows you the release notes, and — if you confirm — replaces the installed file and offers to restart. No terminal, no git, no extra dependency.
 
-The downloaded file is only installed if it is recognisably this application and compiles without errors; the previous version is kept next to it as `savedesktopdesign.py.bak`. If you run the app from a git clone, the button points you to `./install.sh --update` instead of overwriting your working copy.
+The downloaded file is only installed if it is recognisably this application and compiles without errors; the previous version is kept next to it as `saveyourkdedesign.py.bak`. If you run the app from a git clone, the button points you to `./install.sh --update` instead of overwriting your working copy.
 
 **From a git clone:** one command — pulls the latest version and reinstalls:
 
@@ -342,14 +341,14 @@ cd ~/SaveYourKDEDesign && ./install.sh --update
 
 - **A safety net under every restore.** Before anything is overwritten, the current state of exactly those paths is saved to `~/.savedesktopdesign-rollback.tar.gz`, and **Roll back to the state before the last restore** puts it back. Can be switched off per restore. It restores what was overwritten; files the restore added are not removed.
 - **Selective restore.** The restore dialog now lists the categories the archive contains and lets you pick — take the icons from the old machine without its three-monitor panel layout. Archives without a manifest keep the old behaviour and restore everything.
-- **The archive carries the app.** `savedesktopdesign.py` is bundled as `app/savedesktopdesign.py`, so a fresh machine needs no git clone and no install first: unpack that one file and run it.
+- **The archive carries the app.** `saveyourkdedesign.py` is bundled as `app/saveyourkdedesign.py`, so a fresh machine needs no git clone and no install first: unpack that one file and run it.
 - Restores are now path-exact instead of merging whole top-level directories, which is what makes the selection and the rollback precise.
 
 ### v1.4.0
 
 - **One-click update from inside the app.** A **Check for updates** button in the top bar reads the latest GitHub release, shows its notes, and installs the new version on confirmation — then offers to restart. Uses only the Python standard library, no token and no extra dependency.
 - **The installed version is shown next to the button** and tells you where you stand: `v1.4.0`, `v1.4.0 · up to date`, or `v1.4.0 · update to 1.4.1 available` in bold. A silent check at startup keeps it current — it only ever changes that label, never opens a dialog, and never blocks a backup or restore. Turn it off with **Check at startup**; the choice is remembered.
-- The update is written atomically and only after the download has been verified: it must be recognisably this application and compile cleanly, otherwise nothing is touched. The previous version stays as `savedesktopdesign.py.bak`.
+- The update is written atomically and only after the download has been verified: it must be recognisably this application and compile cleanly, otherwise nothing is touched. The previous version stays as `saveyourkdedesign.py.bak`.
 - Running from a git clone is detected — the button points to `./install.sh --update` rather than overwriting your working copy.
 
 ### v1.3.3
@@ -394,7 +393,7 @@ With Python 3.10+ and PyQt6 installed:
 
 ```bash
 QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -v
-python3 -m py_compile savedesktopdesign.py
+python3 -m py_compile saveyourkdedesign.py
 ```
 
 An opt-in integration check publishes a tiny **synthetic** package to Catbox and
@@ -408,4 +407,4 @@ python3 tests/live_catbox_probe.py --upload-synthetic-fixture
 GitHub Actions runs the offline suite on Python 3.10, 3.12 and 3.13. Pushing a
 version tag such as `v1.6.0` publishes a GitHub release only after all three test
 jobs pass and the tag matches `VERSION`. Release text comes from
-`RELEASE_NOTES.md`; `savedesktopdesign.py` is attached as a downloadable asset.
+`RELEASE_NOTES.md`; `saveyourkdedesign.py` is attached as a downloadable asset.

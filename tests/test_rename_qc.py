@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 import urllib.error
 
-import savedesktopdesign as app
+import saveyourkdedesign as app
 
 
 class RenameTests(unittest.TestCase):
@@ -26,6 +26,11 @@ class RenameTests(unittest.TestCase):
         compile(source, "download.py", "exec")
         self.assertEqual(app.APP_NAME, "SaveYourKDEDesign")
         self.assertEqual(app.LEGACY_APP_NAME, "SaveDesktopDesign")
+
+    def test_legacy_download_path_stays_identical_for_existing_updaters(self):
+        canonical = Path(app.__file__)
+        legacy = canonical.with_name("savedesktopdesign.py")
+        self.assertEqual(legacy.read_text(), canonical.read_text())
 
     def test_missing_new_repository_falls_back_to_old_endpoint(self):
         error = urllib.error.HTTPError(app.RELEASE_API, 404, "Not found", {}, io.BytesIO())
@@ -59,7 +64,7 @@ class RenameTests(unittest.TestCase):
                 launcher = home / ".local/bin" / name
                 self.assertTrue(os.access(launcher, os.X_OK))
                 subprocess.run(["bash", "-n", str(launcher)], check=True)
-                self.assertIn(str(home / ".local/share/savedesktopdesign/savedesktopdesign.py"), launcher.read_text())
+                self.assertIn(str(home / ".local/share/savedesktopdesign/saveyourkdedesign.py"), launcher.read_text())
             entry = (home / ".local/share/applications/savedesktopdesign.desktop").read_text()
             self.assertIn("Name=SaveYourKDEDesign", entry)
             self.assertIn('Exec="' + str(home / ".local/bin/saveyourkdedesign") + '"', entry)
@@ -74,7 +79,7 @@ class RenameTests(unittest.TestCase):
 
     def test_in_app_update_migrates_menu_but_preserves_custom_launcher(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(app, "HOME", Path(tmp)):
-            installed = Path(tmp) / ".local/share/savedesktopdesign/savedesktopdesign.py"
+            installed = Path(tmp) / ".local/share/savedesktopdesign/saveyourkdedesign.py"
             installed.parent.mkdir(parents=True)
             installed.touch()
             entry = Path(tmp) / ".local/share/applications/savedesktopdesign.desktop"

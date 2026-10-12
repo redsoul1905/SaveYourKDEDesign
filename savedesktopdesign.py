@@ -47,14 +47,14 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.7.7"
+VERSION = "1.7.8"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
 LEGACY_GITHUB_REPO = "redsoul1905/Savedesktopdesign"
 RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 RAW_URL = ("https://raw.githubusercontent.com/" + GITHUB_REPO
-           + "/{tag}/savedesktopdesign.py")
+           + "/{tag}/saveyourkdedesign.py")
 MAX_DOWNLOAD = 2_000_000   # Obergrenze, damit ein kaputter Server uns nicht flutet
 
 # ----------------------------------------------------------------------------
@@ -1245,6 +1245,104 @@ def merge_panel_views(source: str, target: str, mapping: dict, removed: set) -> 
     return "\n".join(result).rstrip() + "\n"
 
 
+PANEL_VIEW_KEYS = ("alignment", "floating", "panelLengthMode", "panelOpacity",
+                   "panelVisibility", "maxLength", "minLength", "offset", "thickness")
+
+
+def _block_values(blocks, group: str) -> dict[str, str]:
+    """Return the last value for each key in one KConfig group."""
+    for candidate, lines in blocks:
+        if candidate == group:
+            return dict(line.split("=", 1) for line in lines if "=" in line)
+    return {}
+
+
+def panel_layout_snapshot(applet_config: str, views_config: str, screen: int) -> list[dict]:
+    """Describe panels without machine-local IDs or widget settings.
+
+    The snapshot is deliberately small: it is only a fidelity contract for the
+    panel edge, view geometry and ordered widget plugin IDs.  It never exports
+    widget data such as commands, notes, paths or credentials.
+    """
+    applet_blocks = _kconfig_blocks(applet_config)[1]
+    view_blocks = _kconfig_blocks(views_config)[1]
+    result = []
+    for containment_id in sorted(_screen_containments(applet_blocks, screen), key=int):
+        top = _block_values(applet_blocks, f"[Containments][{containment_id}]")
+        if top.get("plugin") != "org.kde.panel":
+            continue
+        applets = {}
+        prefix = f"[Containments][{containment_id}][Applets]["
+        for group, lines in applet_blocks:
+            if group.startswith(prefix) and group.endswith("]"):
+                applet_id = group[len(prefix):-1]
+                values = dict(line.split("=", 1) for line in lines if "=" in line)
+                if applet_id.isdigit() and values.get("plugin"):
+                    applets[applet_id] = values["plugin"]
+        order = [item for item in top.get("AppletOrder", "").split(";")
+                 if item in applets]
+        order += [item for item in sorted(applets, key=int) if item not in order]
+        view = _block_values(view_blocks, f"[PlasmaViews][Panel {containment_id}]")
+        defaults = _block_values(view_blocks, f"[PlasmaViews][Panel {containment_id}][Defaults]")
+        geometry = {key: (view.get(key) if key in view else defaults.get(key))
+                    for key in PANEL_VIEW_KEYS
+                    if key in view or key in defaults}
+        result.append({"edge": top.get("location", ""),
+                       "widgets": [applets[item] for item in order],
+                       "geometry": geometry})
+    return result
+
+
+def panel_layout_warnings(snapshot: list[dict], screen_width: int) -> list[str]:
+    """Flag objectively overlapping panels while preserving the source layout."""
+    if screen_width <= 0:
+        return []
+    spans = []
+    for index, panel in enumerate(snapshot, 1):
+        geometry = panel["geometry"]
+        try:
+            minimum = int(geometry.get("minLength", "0"))
+            maximum = int(geometry.get("maxLength", "0"))
+            offset = int(geometry.get("offset", "0"))
+            alignment = int(geometry.get("alignment", "132"))
+        except ValueError:
+            continue
+        length = minimum if minimum == maximum else 0
+        if length <= 0:
+            continue
+        if alignment & 1:  # left
+            start = offset
+        elif alignment & 2:  # right
+            start = screen_width - length - offset
+        else:  # horizontal centre
+            start = (screen_width - length) // 2 + offset
+        spans.append((panel["edge"], start, start + length, index))
+    warnings = []
+    for pos, (edge, start, end, index) in enumerate(spans):
+        for other_edge, other_start, other_end, other_index in spans[pos + 1:]:
+            if edge == other_edge and min(end, other_end) - max(start, other_start) > 4:
+                warnings.append(f"Panels {index} and {other_index} overlap at edge {edge}")
+    return warnings
+
+
+def valid_layout_snapshot(value) -> bool:
+    if not isinstance(value, list) or len(value) > 64:
+        return False
+    for panel in value:
+        if not isinstance(panel, dict) or set(panel) != {"edge", "widgets", "geometry"}:
+            return False
+        if (not isinstance(panel["edge"], str) or len(panel["edge"]) > 16
+                or not isinstance(panel["widgets"], list) or len(panel["widgets"]) > 128
+                or not isinstance(panel["geometry"], dict) or set(panel["geometry"]) - set(PANEL_VIEW_KEYS)):
+            return False
+        if (not all(isinstance(plugin, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,200}", plugin)
+                    for plugin in panel["widgets"])
+                or not all(isinstance(key, str) and isinstance(item, str) and len(item) <= 32
+                           for key, item in panel["geometry"].items())):
+            return False
+    return True
+
+
 def selected_font_files(family: str) -> list[Path]:
     """Include every installed style of an exact family, never a silent fallback."""
     output = _run_cmd(["fc-list", "--format", "%{family}\t%{file}\n"], 15) or ""
@@ -1466,10 +1564,20 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
     profile["primary_screen"] = export_primary
     if "desktop" in profile and profile["desktop"] != "KDE":
         raise ValueError("Export from a KDE Plasma session / Bitte aus einer KDE-Plasma-Sitzung exportieren")
+    exported_layout = panel_layout_snapshot(
+        (home / ".config/plasma-org.kde.plasma.desktop-appletsrc").read_text(encoding="utf-8")
+        if (home / ".config/plasma-org.kde.plasma.desktop-appletsrc").is_file() else "",
+        (home / ".config/plasmashellrc").read_text(encoding="utf-8")
+        if (home / ".config/plasmashellrc").is_file() else "",
+        export_primary)
+    source_width = (screens[export_primary]["width"]
+                    if export_primary < len(screens) else 0)
     return {"app": APP_NAME, "version": VERSION, "public_design": 1,
             "created": datetime.now().isoformat(timespec="seconds"),
             "profile": profile, "paths": sorted(set(paths)),
             "requirements": requirements, "omitted_settings": len(omitted),
+            "layout": exported_layout,
+            "layout_warnings": panel_layout_warnings(exported_layout, source_width),
             "categories": [], "with_packages": False}
 
 
@@ -1607,6 +1715,12 @@ def inspect_public_archive(path: Path) -> dict:
         primary = profile.get("primary_screen", 0)
         if type(primary) is not int or primary < 0 or (screens and primary >= len(screens)):
             raise ValueError("Invalid primary screen")
+        if "layout" in manifest and not valid_layout_snapshot(manifest["layout"]):
+            raise ValueError("Invalid layout fidelity data")
+        if "layout_warnings" in manifest and (not isinstance(manifest["layout_warnings"], list)
+                                               or not all(isinstance(item, str) and len(item) <= 200
+                                                          for item in manifest["layout_warnings"])):
+            raise ValueError("Invalid layout warning data")
         requirements = manifest.get("requirements")
         if not isinstance(requirements, list) or len(requirements) > 1000:
             raise ValueError("Invalid requirements")
@@ -2468,10 +2582,10 @@ class BackupWorker(QThread):
                     self.progress.emit(int(done / total * 100))
 
                 # Die App selbst beilegen: auf dem neuen Gerät genügt dann
-                # `tar xzf … app/savedesktopdesign.py` und ein Doppelklick.
+                # `tar xzf … app/saveyourkdedesign.py` und ein Doppelklick.
                 try:
                     tar.add(Path(__file__).resolve(),
-                            arcname="app/savedesktopdesign.py")
+                            arcname="app/saveyourkdedesign.py")
                     manifest["app_included"] = True
                     self.log.emit(T("log_app_added"))
                 except OSError as e:
@@ -2624,6 +2738,18 @@ class RestoreWorker(QThread):
                                 shell.read_text(encoding="utf-8"),
                                 current_shell.read_text(encoding="utf-8") if current_shell.is_file() else "",
                                 mapping, removed), encoding="utf-8")
+                        expected_layout = manifest.get("layout")
+                        if expected_layout is not None:
+                            applied_layout = panel_layout_snapshot(
+                                layout.read_text(encoding="utf-8"),
+                                (src_home / shell_rel).read_text(encoding="utf-8")
+                                if (src_home / shell_rel).is_file() else "",
+                                target_primary)
+                            if applied_layout != expected_layout:
+                                raise ValueError("Panel layout verification failed; the design was not written")
+                            self.log.emit(f"  + Panel layout verified: {len(applied_layout)} panel(s), widget order preserved")
+                        for warning in manifest.get("layout_warnings", []):
+                            self.log.emit("  ! Layout warning from design source: " + warning)
 
                 if src_home.exists():
                     if self.rollback:
@@ -2988,6 +3114,8 @@ class MainWindow(QMainWindow):
         manifest = details["manifest"]
         self.share_log.append(f"{T('share_details')}: {len(manifest['paths'])} files")
         self.share_log.append(f"{T('share_omitted')}: {manifest.get('omitted_settings', 0)} settings")
+        for warning in manifest.get("layout_warnings", []):
+            self.share_log.append("! Layout QC: " + warning)
         if value.startswith("SDD1:"):
             self._last_share_code = value
             self.settings.setValue("last_share_code", value)
@@ -3633,8 +3761,11 @@ def migrate_installed_branding(app_file: Path):
     Git checkouts and custom launchers are untouched. Legacy settings/storage
     deliberately keep their paths and are not copied or deleted.
     """
-    installed = HOME / ".local/share/savedesktopdesign/savedesktopdesign.py"
-    if app_file.resolve() != installed.resolve():
+    installed = HOME / ".local/share/savedesktopdesign/saveyourkdedesign.py"
+    legacy = HOME / ".local/share/savedesktopdesign/savedesktopdesign.py"
+    if app_file.resolve() == legacy.resolve() and not installed.exists():
+        shutil.copy2(app_file, installed)
+    if app_file.resolve() not in {installed.resolve(), legacy.resolve()}:
         return
     entry = HOME / ".local/share/applications/savedesktopdesign.desktop"
     if entry.is_file() and not entry.is_symlink():

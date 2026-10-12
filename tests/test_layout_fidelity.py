@@ -69,6 +69,58 @@ class LayoutFidelityTests(unittest.TestCase):
         self.assertIn('[Panel 10]\nsecondary=keep', views)
         self.assertNotIn('old=remove', views)
 
+    def test_layout_snapshot_preserves_panel_geometry_and_widget_order(self):
+        source = '''[Containments][1]
+lastScreen=0
+location=3
+plugin=org.kde.panel
+AppletOrder=11;12
+[Containments][1][Applets][11]
+plugin=org.kde.plasma.digitalclock
+[Containments][1][Applets][12]
+plugin=org.kde.netspeedWidget
+[Containments][2]
+lastScreen=0
+location=3
+plugin=org.kde.panel
+AppletOrder=21
+[Containments][2][Applets][21]
+plugin=org.kde.plasma.systemmonitor.memory
+'''
+        views = '''[PlasmaViews][Panel 1]
+alignment=1
+panelLengthMode=1
+[PlasmaViews][Panel 1][Defaults]
+minLength=960
+maxLength=960
+offset=0
+[PlasmaViews][Panel 2]
+alignment=2
+panelLengthMode=1
+[PlasmaViews][Panel 2][Defaults]
+minLength=960
+maxLength=960
+offset=0
+'''
+        expected = app.panel_layout_snapshot(source, views, 0)
+        self.assertEqual(expected[0]['widgets'], [
+            'org.kde.plasma.digitalclock', 'org.kde.netspeedWidget'])
+        mapping = {}
+        restored = app.merge_primary_applet_config(source, '', 0, 0, mapping)
+        restored_views = app.merge_panel_views(views, '', mapping, set())
+        self.assertEqual(app.panel_layout_snapshot(restored, restored_views, 0), expected)
+
+    def test_layout_qc_reports_overlapping_top_panels_without_rewriting_them(self):
+        layout = [{'edge': '3', 'widgets': [],
+                   'geometry': {'alignment': '132', 'minLength': '1920',
+                                'maxLength': '1920', 'offset': '0'}},
+                  {'edge': '3', 'widgets': [],
+                   'geometry': {'alignment': '2', 'minLength': '1920',
+                                'maxLength': '1920', 'offset': '0'}}]
+        self.assertEqual(app.panel_layout_warnings(layout, 1920),
+                         ['Panels 1 and 2 overlap at edge 3'])
+        self.assertTrue(app.valid_layout_snapshot(layout))
+
     def test_systray_containment_is_kept_without_screen_assignment(self):
         source = ('[Containments][1]\nlastScreen=0\n'
                   '[Containments][1][Applets][2][Configuration]\nSystrayContainmentId=3\n'
