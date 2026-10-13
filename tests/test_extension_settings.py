@@ -31,8 +31,8 @@ class ExtensionSettingsTests(unittest.TestCase):
             self.assertIn(setting, text)
         for private in ['personal document', 'private', 'source-id', '12345']:
             self.assertNotIn(private, text)
-        self.assertEqual({row['action'] for row in actions}, {'reset', 'review'})
-        self.assertEqual(manifest['settings_review_count'], 1)
+        self.assertEqual(actions, [])
+        self.assertEqual(manifest['settings_review_count'], 0)
         self.assertTrue(all(row['solution'] for row in actions))
 
     def test_schema_defaults_for_unknown_script(self):
@@ -134,6 +134,70 @@ class ExtensionSettingsTests(unittest.TestCase):
         text = (self.home / '.config/kwinrc').read_text()
         self.assertIn('Preference=keep', text)
         self.assertIn('Brightness=0.4', text)
+
+    def test_reviewed_widget_adapters(self):
+        for plugin, key, value in [
+            ('org.kde.plasma.pager', 'displayedText', 'Number'),
+            ('org.kde.plasma.digitalclock', 'fontStyleName', 'Bold'),
+            ('org.kde.plasma.kickoff', 'global', 'Alt+F1'),
+            ('org.kde.plasma.kickoff', 'systemFavorites', 'suspend\\\\,shutdown'),
+            ('luisbocanegra.panel.colorizer', 'configurationOverrides', '{"overrides":{},"associations":[]}'),
+            ('org.kde.olib.thermalmonitor', 'sensors', '[{"name":"9800X3D","sensorId":"cpu/all/averageTemperature"}]'),
+        ]:
+            with self.subTest(key=key):
+                self.assertEqual(app.widget_setting_adapter(plugin, key, value)[0], 'copy')
+
+    def test_adapters_reject_unreviewed_text_commands_and_sensor_paths(self):
+        for plugin, key, value in [
+            ('org.kde.plasma.kickoff', 'global', 'touch /tmp/test'),
+            ('org.kde.plasma.kickoff', 'systemFavorites', 'custom-command'),
+            ('org.kde.olib.thermalmonitor', 'sensors', '[{"name":"private-person","sensorId":"cpu/all/averageTemperature"}]'),
+            ('luisbocanegra.panel.colorizer', 'configurationOverrides', '{"overrides":{"command":"secret"},"associations":[]}'),
+        ]:
+            self.assertIsNone(app.widget_setting_adapter(plugin, key, value))
+
+    def test_root_disk_sensor_uses_portable_role_not_source_uuid(self):
+        with patch.object(app, 'root_disk_uuid', return_value='source-uuid'):
+            result = app.widget_setting_adapter('org.kde.plasma.systemmonitor.memory',
+                                                'highPrioritySensorIds', '["disk/source-uuid/free"]')
+            self.assertEqual(result[0], 'copy')
+            self.assertIn(app.ROOT_DISK_TOKEN, result[1])
+            self.assertNotIn('source-uuid', result[1])
+            self.assertIsNone(app.widget_setting_adapter('org.kde.plasma.systemmonitor.memory',
+                                                        'highPrioritySensorIds', '["disk/other-uuid/free"]'))
+
+    def test_import_resolves_root_disk_sensor_on_target(self):
+        rel = '.config/plasma-org.kde.plasma.desktop-appletsrc'
+        config = ('[Containments][1]\nlastScreen=0\nplugin=org.kde.panel\n'
+                  '[Containments][1][Applets][2]\nplugin=org.kde.plasma.systemmonitor.memory\n'
+                  '[Containments][1][Applets][2][Configuration][Sensors]\n'
+                  'totalSensors=["disk/' + app.ROOT_DISK_TOKEN + '/free"]\n')
+        archive = self.root / 'sensor.sdd'
+        fixtures.archive_file(archive, [('home/' + rel, config.encode())], fixtures.manifest([rel]))
+        worker = app.RestoreWorker(str(archive), public=True, rollback=False)
+        errors = []
+        worker.failed.connect(errors.append)
+        with patch.object(app, 'desktop_profile', return_value=PROFILE), patch.object(worker, '_post_restore'), \
+                patch.object(app, 'root_disk_uuid', return_value='target-uuid'):
+            worker.run()
+        self.assertEqual(errors, [])
+        text = (self.home / rel).read_text()
+        self.assertIn('disk/target-uuid/free', text)
+        self.assertNotIn(app.ROOT_DISK_TOKEN, text)
+
+    def test_private_weather_and_widget_cache_do_not_prompt(self):
+        self.config('plasma-org.kde.plasma.desktop-appletsrc',
+                    '[Containments][1]\nplugin=org.kde.panel\nlastScreen=0\n'
+                    '[Containments][1][Applets][2]\nplugin=luisbocanegra.panel.colorizer\n'
+                    '[Containments][1][Applets][2][Configuration][General]\npanelWidgets=["private"]\n'
+                    'lastPreset=/home/somebody/preset\n'
+                    '[Containments][1][Applets][3]\nplugin=org.example.weather\n'
+                    '[Containments][1][Applets][3][Configuration][General]\nlocationName=private location\n')
+        stage, actions, _ = self.export()
+        self.assertEqual(actions, [])
+        text = (stage / 'home/.config/plasma-org.kde.plasma.desktop-appletsrc').read_text()
+        self.assertNotIn('private', text)
+        self.assertNotIn('/home/somebody', text)
 
 
 if __name__ == '__main__':

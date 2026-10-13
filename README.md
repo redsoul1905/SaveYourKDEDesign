@@ -11,12 +11,19 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.8.0** · [Changelog](#changelog)
+**Current version: 1.8.1** · [Changelog](#changelog)
+
+**New in 1.8.1:** reviewed adapters preserve pager text mode, clock font style,
+calendar plugin selection, launcher actions/shortcut, rounded-corner filters and
+supported monitor settings. Root-disk sensors are rebound to the target system
+disk. Personal weather locations/window titles and regenerable widget caches
+are excluded automatically from anonymous designs, without per-setting prompts.
+Unknown visual structures still require review; their warnings are not hidden.
 
 **New in 1.8.0:** export portable Krohnkite and Glass/Blur settings, discover
 KConfigXT settings/defaults for installed widgets and KWin scripts, and transfer
 virtual desktop count/rows without publishing desktop names or identities.
-Before uploading, settings needing attention are identified with a proposed
+Before uploading, unknown visual settings needing attention are identified with a proposed
 resolution. Cancelling leaves nothing uploaded; continuing explicitly accepts
 the listed omissions/resets. Unknown free text, commands and private data are
 not automatically published. This is not a universal arbitrary-app backup.

@@ -1,4 +1,23 @@
-# SaveYourKDEDesign 1.8.0
+# SaveYourKDEDesign 1.8.1
+
+- Eliminate false-positive reviews for supported visual settings: pager text
+  mode, clock style/calendar selection, launcher actions/shortcut, round-corner
+  class filters, empty Panel Colorizer overrides and supported monitor settings.
+- Do not publish personal weather locations, private title filters or local
+  notification/history state. Anonymous export excludes these automatically.
+- Do not transfer Panel Colorizer's regenerable panelWidgets cache or local
+  lastPreset path; preserve its active appearance configuration.
+- Export root-disk sensor references by role and resolve the receiving system's
+  root UUID before writing configuration. Do not guess for unrelated disks.
+- Retain unresolved-visual-setting review rather than silently dropping unknown
+  structures. Hardware temperature sensor availability remains target-dependent.
+
+QC: 122 offline tests pass. The current real-source design exports with zero
+setting-review prompts without uploading or modifying the desktop. This does
+not establish graphical equivalence on Fedora; personal content is intentionally
+not identical in anonymous exports. Update BOTH computers and create a new code.
+
+## Previous release: 1.8.0
 
 Update BOTH computers and generate a new code. Previously omitted settings
 cannot be recovered from an old public design archive.

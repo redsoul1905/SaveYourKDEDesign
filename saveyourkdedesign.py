@@ -49,7 +49,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -1116,6 +1116,81 @@ def read_setting_schema(path: Path) -> dict:
     return result
 
 
+ROOT_DISK_TOKEN = '__SYKD_ROOT_DISK__'
+
+
+def root_disk_uuid() -> str:
+    value = (_run_cmd(['findmnt', '-n', '-o', 'UUID', '/'], 10) or '').strip()
+    return value if re.fullmatch(r'[A-Za-z0-9-]{4,100}', value) else ''
+
+
+def widget_setting_adapter(plugin: str, key: str, value: str):
+    """Reviewed semantic adapters, not permission to copy arbitrary strings."""
+    if plugin == 'org.kde.plasma.kickoff':
+        if key == 'systemFavorites' and all(item in {'', 'suspend', 'hibernate', 'reboot', 'shutdown',
+                'logout', 'lock-screen', 'switch-user', 'save-session'} for item in value.replace('\\', '').split(',')):
+            return 'copy', value, 'Systemaktionen übernehmen, keine eigenen Befehle.'
+        if key == 'global' and re.fullmatch(r'(?:(?:Alt|Ctrl|Shift|Meta)\+)*(?:F\d{1,2}|Space|[A-Z])', value):
+            return 'copy', value, 'Tastenkürzel für den Anwendungsstarter übernehmen.'
+    if plugin == 'org.kde.olib.thermalmonitor' and key == 'sensors':
+        try:
+            items = json.loads(value)
+            if (isinstance(items, list) and len(items) <= 32 and all(
+                    isinstance(item, dict) and set(item) == {'name', 'sensorId'}
+                    and isinstance(item['name'], str) and isinstance(item['sensorId'], str)
+                    and re.fullmatch(r'(?:CPU|GPU|Processor|Graphics|Temperature|\d{3,5}[A-Za-z0-9 -]{0,20})', item['name'])
+                    and re.fullmatch(r'(?:cpu/(?:all|cpu\d+)/(?:averageTemperature|temperature)|gpu/gpu\d+/(?:temperature|temp\d+))', item['sensorId'])
+                    for item in items)):
+                return 'copy', value, 'Temperatursensoren ohne private Pfade und Hardware-Seriennummern übernehmen.'
+        except ValueError:
+            pass
+    if plugin == 'luisbocanegra.panel.colorizer':
+        if key in {'panelWidgets', 'lastPreset'}:
+            return 'exclude', '', 'Lokaler Cache; Panel Colorizer ermittelt die Ziel-Widgets selbst neu.'
+        if key == 'configurationOverrides':
+            try:
+                if json.loads(value) == {'overrides': {}, 'associations': []}:
+                    return 'copy', value, 'Leere Überschreibungen vollständig übernehmen.'
+            except ValueError:
+                pass
+    if plugin == 'org.kde.plasma.pager' and key == 'displayedText' and value in {'Number', 'Name', 'None'}:
+        return 'copy', value, 'Arbeitsflächen-Darstellung übernehmen.'
+    if plugin == 'org.kde.plasma.digitalclock':
+        if key == 'fontStyleName' and value in {'Regular', 'Bold', 'Italic', 'Bold Italic', 'Light', 'Medium', 'DemiBold'}:
+            return 'copy', value, 'Schriftschnitt übernehmen.'
+        if key == 'enabledCalendarPlugins' and all(v in {'', 'pimevents', 'holidaysevents', 'astronomicalevents'} for v in value.split(',')):
+            return 'copy', value, 'Kalender-Erweiterungsauswahl übernehmen, keine Kalendereinträge.'
+    if plugin.startswith('org.kde.plasma.systemmonitor.'):
+        if key in {'CurrentPreset', 'chartFace'} and re.fullmatch(r'org\.kde\.[A-Za-z0-9_.-]+', value):
+            return 'copy', value, 'Monitor-Darstellung übernehmen.'
+        if key in {'highPrioritySensorIds', 'lowPrioritySensorIds', 'totalSensors'}:
+            try:
+                sensors = json.loads(value)
+                if not isinstance(sensors, list) or not all(isinstance(s, str) for s in sensors):
+                    return None
+                source_root = root_disk_uuid()
+                result = []
+                for sensor in sensors:
+                    if source_root and sensor.startswith('disk/' + source_root + '/'):
+                        sensor = 'disk/' + ROOT_DISK_TOKEN + '/' + sensor.split('/')[-1]
+                    if not re.fullmatch(r'(?:disk/' + ROOT_DISK_TOKEN + r'/(?:free|used|total|freePercent|usedPercent)|memory/(?:physical|swap)/(?:free|used|total|usedPercent))', sensor):
+                        return None
+                    result.append(sensor)
+                return 'copy', json.dumps(result), 'Systemlaufwerk anhand seiner Rolle am Ziel zuordnen, nicht anhand der Quell-UUID.'
+            except ValueError:
+                pass
+    return None
+
+
+def private_setting(key: str) -> bool:
+    lower = key.casefold()
+    return (any(part in lower for part in ('password', 'secret', 'token', 'credential', 'apikey',
+            'command', 'executable', 'username', 'email', 'history', 'clipboard', 'note'))
+            or lower in {'floatingtitle', 'title', 'text', 'activelocation', 'countrycode', 'locationname',
+                         'savedlocations', 'timezone', 'notificationsentkeys', 'alertnotificationstate',
+                         'notificationspaceweatherlastdate', 'notificationuvlastdate'})
+
+
 def portable_setting(key: str, value: str, spec: dict | None = None) -> tuple[str, str, str]:
     """Classify extension settings without executing or trusting their schemas."""
     lower = key.casefold()
@@ -1124,6 +1199,9 @@ def portable_setting(key: str, value: str, spec: dict | None = None) -> tuple[st
         return 'review', '', 'Privater oder ausführbarer Inhalt: nicht veröffentlichen; bei Bedarf nur am Ziel konfigurieren.'
     if lower in {'ignoreactivity', 'ignorescreen', 'screen', 'activityid'}:
         return 'reset', '', 'Lokalen Bildschirm-/Aktivitätsfilter am Ziel neu zuordnen; im öffentlichen Design leer setzen.'
+    if spec and lower in {'displayedtext', 'showtext', 'showtitle'}:
+        if value in {'0', '1', 'true', 'false'} or value in spec.get('choices', []):
+            return 'copy', value, 'Deklarierte Darstellungsoption übernehmen.'
     if 'title' in lower or 'text' in lower:
         return 'review', '', 'Freitext/Fenstertitel kann privat sein: in den Einstellungen dieser Erweiterung am Ziel neu zuordnen.'
     if len(value) > 8192 or '\x00' in value:
@@ -1735,6 +1813,16 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                     values.append((group, key, normalized))
         lines, group_before = [], None
         for group, key, value in values:
+            owner = next((plugin for prefix, plugin in widget_owners.items()
+                          if group.startswith(prefix + '[Configuration]')), '')
+            adapted = widget_setting_adapter(owner, key, value) if owner else None
+            if filename == 'kwinrc' and group == '[Round-Corners]' and key in {'Inclusions', 'Exclusions'}:
+                adapted = portable_setting('windowClass', value)
+            # Anonymous designs intentionally exclude personal content and caches.
+            # Unknown visual formats remain actionable blockers, not silent losses.
+            if private_setting(key) or (adapted and adapted[0] == 'exclude'):
+                omitted.append(filename + ':' + key)
+                continue
             if key == 'launchers' and filename == 'plasma-org.kde.plasma.desktop-appletsrc':
                 normalized = portable_launchers(value)
                 if normalized != value:
@@ -1742,11 +1830,11 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                 value = normalized
             enabled_effect = filename == "kwinrc" and group == "[Plugins]" and key.endswith("Enabled")
             extension_setting = ((filename == 'kwinrc' and bool(re.fullmatch(r'\[(?:Script|Effect)-[\w.-]+\]|\[Round-Corners\]', group)))
-                                 or (group, key) in specs)
+                                 or (group, key) in specs or adapted is not None)
             extension_extra = False
             if extension_setting and key not in {'globalSettings', 'launchers'}:
-                action, replacement, solution = portable_setting(key, value, specs.get((group, key)))
-                if action != 'copy':
+                action, replacement, solution = adapted or portable_setting(key, value, specs.get((group, key)))
+                if action == 'review':
                     setting_actions.append({'component': filename + ':' + group, 'key': key,
                                             'action': action, 'solution': solution})
                 if action == 'review':
@@ -3200,6 +3288,13 @@ class RestoreWorker(QThread):
                                 raise ValueError("Configuration too large")
                             config.write_text(config.read_text(encoding="utf-8").replace(
                                 HOME_TOKEN, str(HOME)), encoding="utf-8")
+                            text = config.read_text(encoding='utf-8')
+                            if ROOT_DISK_TOKEN in text:
+                                target_uuid = root_disk_uuid()
+                                if not target_uuid:
+                                    raise ValueError('Systemlaufwerk für das Monitor-Widget nicht bestimmbar. '
+                                                     'Datenträger-Sensor im Widget am Ziel auswählen; Design noch nicht geschrieben.')
+                                config.write_text(text.replace(ROOT_DISK_TOKEN, target_uuid), encoding='utf-8')
                     layout_rel = ".config/plasma-org.kde.plasma.desktop-appletsrc"
                     layout = src_home / layout_rel
                     if self.public and layout_rel in rel_paths and layout.is_file():
