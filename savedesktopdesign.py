@@ -49,7 +49,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.8.1"
+VERSION = "1.8.2"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -1126,6 +1126,27 @@ def root_disk_uuid() -> str:
 
 def widget_setting_adapter(plugin: str, key: str, value: str):
     """Reviewed semantic adapters, not permission to copy arbitrary strings."""
+    if plugin == 'org.kde.windowbuttons':
+        if key == 'buttons' and re.fullmatch(r'(?:10|[0-9])(?:\|(?:10|[0-9])){0,15}', value):
+            return 'copy', value, 'Reihenfolge der Fensterknöpfe übernehmen.'
+        if key == 'selectedPlugin' and value == 'org.kde.breeze':
+            return 'copy', value, 'Breeze-Fensterknöpfe übernehmen.'
+        if key == 'selectedScheme' and value == '_plasmatheme_':
+            return 'copy', value, 'Farben aus dem Plasma-Design verwenden.'
+    if plugin == 'plasmusic-toolbar':
+        boolean_keys = {'songTextInPanel', 'pauseTextScrollingWhileMediaIsNotPlaying',
+                        'textScrollingEnabled', 'textScrollingResetOnPause',
+                        'useSongTextFixedWidth', 'fullViewSongTextVisible'}
+        integer_keys = {'textScrollingSpeed', 'textScrollingBehaviour', 'songTextAlignment',
+                        'songTextFixedWidth', 'fullViewTextScrollingSpeed', 'titlePosition',
+                        'fullTitlePosition', 'fullViewSongTextAlignment', 'fullViewSongTextPosition',
+                        'compactTruncatedTextStyle'}
+        if key in boolean_keys and value.lower() in {'true', 'false'}:
+            return 'copy', value.lower(), 'Text-Darstellung übernehmen, keine Musiktitel oder Wiedergabeverläufe.'
+        if key in integer_keys and re.fullmatch(r'\d{1,5}', value):
+            return 'copy', value, 'Text-Anordnung und Scrollverhalten übernehmen.'
+        if key == 'panelIcon' and value in {'view-media-track', 'media-playback-start', 'audio-x-generic', 'media-optical-audio'}:
+            return 'copy', value, 'Standard-Musiksymbol übernehmen.'
     if plugin == 'org.kde.plasma.kickoff':
         if key == 'systemFavorites' and all(item in {'', 'suspend', 'hibernate', 'reboot', 'shutdown',
                 'logout', 'lock-screen', 'switch-user', 'save-session'} for item in value.replace('\\', '').split(',')):
@@ -1189,6 +1210,15 @@ def private_setting(key: str) -> bool:
             or lower in {'floatingtitle', 'title', 'text', 'activelocation', 'countrycode', 'locationname',
                          'savedlocations', 'timezone', 'notificationsentkeys', 'alertnotificationstate',
                          'notificationspaceweatherlastdate', 'notificationuvlastdate'})
+
+
+def kwin_setting_adapter(group: str, key: str, value: str):
+    if group == '[Script-karousel]' and key == 'presetWidths':
+        widths = [part.strip() for part in value.split(',')]
+        if (1 <= len(widths) <= 32 and all(re.fullmatch(r'\d{1,3}(?:\.\d{1,2})?%', width)
+                                        and 0 < float(width[:-1]) <= 100 for width in widths)):
+            return 'copy', ', '.join(widths), 'Karousel-Spaltenbreiten relativ zur Ziel-Bildschirmbreite übernehmen.'
+    return None
 
 
 def portable_setting(key: str, value: str, spec: dict | None = None) -> tuple[str, str, str]:
@@ -1808,7 +1838,11 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
         for (group, key), spec in sorted(specs.items()):
             default = spec.get('default')
             if (group, key) not in existing and default is not None:
-                action, normalized, _ = portable_setting(key, default.strip(), spec)
+                owner = next((plugin for prefix, plugin in widget_owners.items()
+                              if group.startswith(prefix + '[Configuration]')), '')
+                action, normalized, _ = (widget_setting_adapter(owner, key, default.strip())
+                                         or (kwin_setting_adapter(group, key, default.strip()) if filename == 'kwinrc' else None)
+                                         or portable_setting(key, default.strip(), spec))
                 if action == 'copy':
                     values.append((group, key, normalized))
         lines, group_before = [], None
@@ -1816,6 +1850,8 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
             owner = next((plugin for prefix, plugin in widget_owners.items()
                           if group.startswith(prefix + '[Configuration]')), '')
             adapted = widget_setting_adapter(owner, key, value) if owner else None
+            if filename == 'kwinrc':
+                adapted = kwin_setting_adapter(group, key, value)
             if filename == 'kwinrc' and group == '[Round-Corners]' and key in {'Inclusions', 'Exclusions'}:
                 adapted = portable_setting('windowClass', value)
             # Anonymous designs intentionally exclude personal content and caches.

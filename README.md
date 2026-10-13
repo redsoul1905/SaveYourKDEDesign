@@ -11,7 +11,11 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.8.1** · [Changelog](#changelog)
+**Current version: 1.8.2** · [Changelog](#changelog)
+
+**New in 1.8.2:** reviewed adapters for Window Buttons order, PlasMusic text
+presentation and Karousel relative widths, including safe installed schema
+defaults. [Coverage and upstream sources](docs/extension-support.md).
 
 **New in 1.8.1:** reviewed adapters preserve pager text mode, clock font style,
 calendar plugin selection, launcher actions/shortcut, rounded-corner filters and

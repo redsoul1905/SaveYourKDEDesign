@@ -1,4 +1,19 @@
-# SaveYourKDEDesign 1.8.1
+# SaveYourKDEDesign 1.8.2
+
+- Preserve Window Buttons' validated button order and standard Breeze/Plasma
+  appearance selections.
+- Preserve reviewed PlasMusic text visibility, positions, alignment and scrolling
+  options without accepting arbitrary private text.
+- Preserve Karousel's percentage-based column-width presets.
+- Apply reviewed widget adapters to safe schema defaults as well as explicit
+  user settings. Add regression coverage for Polonium numeric layout settings.
+- Document exact coverage, exclusions and upstream configuration sources in
+  docs/extension-support.md. No extensions are installed on the development PC.
+
+QC: 126 offline tests; no graphical cross-distribution certification implied.
+Update both computers and generate a fresh code to include the additional values.
+
+## Previous release: 1.8.1
 
 - Eliminate false-positive reviews for supported visual settings: pager text
   mode, clock style/calendar selection, launcher actions/shortcut, round-corner
