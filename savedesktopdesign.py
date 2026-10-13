@@ -25,11 +25,13 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
@@ -47,7 +49,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.7.9"
+VERSION = "1.8.0"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -1089,6 +1091,78 @@ def share_layout_setting_allowed(key: str, value: str) -> bool:
         r"(?:true|false|-?\d+(?:\.\d+)?(?:[,;]-?\d+(?:\.\d+)?)*)", value)))
 
 
+def read_setting_schema(path: Path) -> dict:
+    """Read data-only KConfigXT metadata. Schemas are not permission to publish text."""
+    if not path.is_file():
+        return {}
+    if path.stat().st_size > 512000:
+        raise ValueError('Configuration schema exceeds 512 KB')
+    data = path.read_text(encoding='utf-8')
+    if '<!DOCTYPE' in data.upper() or '<!ENTITY' in data.upper():
+        raise ValueError('Entities in configuration schemas are not supported')
+    root = ET.fromstring(data)
+    for element in root.iter():
+        element.tag = element.tag.rsplit('}', 1)[-1]
+    result = {}
+    for group in root.iter('group'):
+        for entry in group.findall('entry'):
+            name = entry.get('name', '')
+            if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,127}', name):
+                continue
+            default = entry.find('default')
+            result[name] = {'type': entry.get('type', ''), 'group': group.get('name', ''),
+                            'default': default.text if default is not None and not default.attrib else None,
+                            'choices': [c.get('name', '') for c in entry.findall('./choices/choice')]}
+    return result
+
+
+def portable_setting(key: str, value: str, spec: dict | None = None) -> tuple[str, str, str]:
+    """Classify extension settings without executing or trusting their schemas."""
+    lower = key.casefold()
+    if any(s in lower for s in ('password', 'secret', 'token', 'credential', 'apikey', 'command',
+                                'executable', 'username', 'email', 'history', 'clipboard', 'note')):
+        return 'review', '', 'Privater oder ausführbarer Inhalt: nicht veröffentlichen; bei Bedarf nur am Ziel konfigurieren.'
+    if lower in {'ignoreactivity', 'ignorescreen', 'screen', 'activityid'}:
+        return 'reset', '', 'Lokalen Bildschirm-/Aktivitätsfilter am Ziel neu zuordnen; im öffentlichen Design leer setzen.'
+    if 'title' in lower or 'text' in lower:
+        return 'review', '', 'Freitext/Fenstertitel kann privat sein: in den Einstellungen dieser Erweiterung am Ziel neu zuordnen.'
+    if len(value) > 8192 or '\x00' in value:
+        return 'review', '', 'Strukturierte Einstellung benötigt einen Format-Adapter; Schema und Datentyp prüfen.'
+    identities = {os.environ.get('USER', ''), socket.gethostname()}
+    if any(len(s) >= 3 and s.casefold() in value.casefold() for s in identities):
+        return 'review', '', 'Persönlichen Rechner-/Benutzerbezug entfernen oder nur lokal am Ziel setzen.'
+    kind = (spec or {}).get('type', '').lower()
+    if kind in {'path', 'pathlist', 'url', 'urllist', 'password'}:
+        return 'review', '', 'Dateibezug im Erweiterungsdialog neu auswählen; für automatische Übernahme ist ein geprüfter Datei-Adapter erforderlich.'
+    if kind in {'int', 'uint', 'longlong', 'ulonglong', 'double', 'bool'}:
+        valid = (value.lower() in {'true', 'false', '0', '1'} if kind == 'bool' else
+                 bool(re.fullmatch(r'-?\d+(?:\.\d+)?' if kind == 'double' else r'-?\d+', value)))
+        if not valid:
+            return 'review', '', 'Wert passt nicht zum deklarierten Typ ' + kind + '; im Erweiterungsdialog korrigieren oder Erweiterung aktualisieren.'
+    if value.casefold() in {'true', 'false'}:
+        return 'copy', value.lower(), 'Boolesche Einstellung übernehmen.'
+    if re.fullmatch(r'-?\d+(?:\.\d+)?(?:[,;]-?\d+(?:\.\d+)?)*', value):
+        kind = (spec or {}).get('type', '').lower()
+        if kind == 'bool' and value not in {'0', '1'}:
+            return 'review', '', 'Ungültiger Bool-Wert: im Einstellungsdialog auf true/false zurücksetzen.'
+        if kind in {'uint', 'ulonglong'} and value.startswith('-'):
+            return 'review', '', 'Negativen Wert im Einstellungsdialog auf einen zulässigen Wert ändern.'
+        return 'copy', value, 'Typisierte Zahl/Geometrie übernehmen.'
+    if re.fullmatch(r'#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?', value):
+        return 'copy', value, 'Farbwert übernehmen.'
+    if spec and value in spec.get('choices', []):
+        return 'copy', value, 'Deklarierte Auswahl übernehmen.'
+    if 'class' in lower and re.fullmatch(r'[A-Za-z0-9_.\[\]*? ,;\\-]*', value):
+        return 'copy', value, 'Fensterklassen-Filter übernehmen; auf dem Ziel verfügbare Anwendungen prüfen.'
+    if not value:
+        return 'copy', value, 'Leeren Wert übernehmen.'
+    if '/' in value or '\\' in value:
+        return 'review', '', 'Datei/URL-Bezug: benötigte Design-Datei bündeln und Pfad umsetzen; private Dateien nicht teilen.'
+    if 'title' in lower or 'text' in lower:
+        return 'review', '', 'Freitext/Fenstertitel kann privat sein: im Ziel-Einstellungsdialog manuell zuordnen.'
+    return 'review', '', 'Unbekannter Text/Struktur: main.xml/KConfigXT-Schema ergänzen oder einen geprüften Format-Adapter verwenden.'
+
+
 def extension_package_info(package: Path) -> dict[str, str]:
     """Read a KPackage identity from current JSON or legacy desktop metadata."""
     metadata = package / "metadata.json"
@@ -1286,10 +1360,86 @@ PANEL_VIEW_KEYS = ("alignment", "floating", "panelLengthMode", "panelOpacity",
 
 def _block_values(blocks, group: str) -> dict[str, str]:
     """Return the last value for each key in one KConfig group."""
+    result = {}
     for candidate, lines in blocks:
         if candidate == group:
-            return dict(line.split("=", 1) for line in lines if "=" in line)
-    return {}
+            result.update(line.split("=", 1) for line in lines if "=" in line)
+    return result
+
+
+def merge_design_kconfig(source: str, target: str) -> str:
+    """Only replace exported keys; preserve unrelated target preferences."""
+    groups = {}
+    for is_source, text in ((False, target), (True, source)):
+        for group, lines in _kconfig_blocks(text)[1]:
+            groups.setdefault(group, {}).update(line.split('=', 1) for line in lines
+                if '=' in line and not line.startswith(('#', ';'))
+                and not (is_source and group == '[Desktops]' and re.match(r'(?:Id|Name)_', line)))
+    # Source desktop IDs/names are private; reuse target identities and create
+    # only missing IDs locally, never copy IDs from another computer.
+    if '[Desktops]' in groups and 'Number' in groups['[Desktops]']:
+        desktops = groups['[Desktops]']
+        number = int(desktops['Number'])
+        if not 1 <= number <= 100:
+            raise ValueError('Invalid virtual desktop count')
+        for key in list(desktops):
+            match = re.fullmatch(r'(?:Id|Name)_(\d+)', key)
+            if match and int(match[1]) > number:
+                del desktops[key]
+        for index in range(1, number + 1):
+            desktops.setdefault(f'Id_{index}', str(uuid.uuid4()))
+            desktops.setdefault(f'Name_{index}', str(index))
+    return '\n'.join(line for group, settings in groups.items()
+                     for line in [group, *(key + '=' + value for key, value in settings.items())]) + '\n'
+
+
+def activate_kwin_design(settings: dict, dbus: str):
+    """Apply imported script settings and desktop count without restarting KWin."""
+    def call(path, method, *args):
+        result = _run_cmd([dbus, 'org.kde.KWin', path, method, *map(str, args)], 30)
+        if result is None:
+            raise ValueError('KWin konnte die Design-Einstellungen nicht aktivieren: ' + method +
+                             '. Ab- und wieder anmelden, dann Import erneut prüfen.')
+        return result.strip()
+
+    desktop = settings.get('[Desktops]', {})
+    if 'Number' in desktop:
+        desired = int(desktop['Number'])
+        method = 'org.kde.KWin.VirtualDesktopManager.'
+        current = int(call('/VirtualDesktopManager', method + 'count'))
+        # Never silently remove workspaces containing the target user's windows.
+        if current > desired:
+            raise ValueError(f'Das Design benötigt {desired} virtuelle Arbeitsflächen, vorhanden sind {current}. '
+                             'Systemeinstellungen → Fensterverwaltung → Virtuelle Arbeitsflächen: '
+                             'überzählige Arbeitsflächen entfernen und Import wiederholen.')
+        for position in range(current, desired):
+            call('/VirtualDesktopManager', method + 'createDesktop', position, str(position + 1))
+        if 'Rows' in desktop:
+            call('/VirtualDesktopManager', method + 'rows', desktop['Rows'])
+            if call('/VirtualDesktopManager', method + 'rows') != desktop['Rows']:
+                raise ValueError('Arbeitsflächen-Reihen nicht übernommen; Systemeinstellungen → Virtuelle Arbeitsflächen prüfen.')
+        if int(call('/VirtualDesktopManager', method + 'count')) != desired:
+            raise ValueError('Virtuelle Arbeitsflächen wurden nicht übernommen; Anzahl in den Systemeinstellungen prüfen.')
+
+    scripts = [g[8:-1] for g in settings if re.fullmatch(r'\[Script-[\w.-]+\]', g)
+               and settings.get('[Plugins]', {}).get(g[8:-1] + 'Enabled') == 'true']
+    for plugin in scripts:
+        if call('/Scripting', 'org.kde.kwin.Scripting.isScriptLoaded', plugin) == 'true':
+            call('/Scripting', 'org.kde.kwin.Scripting.unloadScript', plugin)
+            for _ in range(20):
+                if call('/Scripting', 'org.kde.kwin.Scripting.isScriptLoaded', plugin) == 'false':
+                    break
+                time.sleep(0.1)
+            else:
+                raise ValueError('KWin-Skript konnte nicht neu geladen werden: ' + plugin + '. Bitte ab- und wieder anmelden.')
+    call('/KWin', 'org.kde.KWin.reconfigure')
+    # reconfigure is queued by KWin; wait before starting scripts from refreshed config.
+    time.sleep(0.5)
+    call('/Scripting', 'org.kde.kwin.Scripting.start')
+    for plugin in scripts:
+        if call('/Scripting', 'org.kde.kwin.Scripting.isScriptLoaded', plugin) != 'true':
+            raise ValueError('KWin-Skript nicht geladen: ' + plugin +
+                             '. In Systemeinstellungen → KWin-Skripte aktivieren; Plasma-Kompatibilität prüfen.')
 
 
 def panel_layout_snapshot(applet_config: str, views_config: str, screen: int) -> list[dict]:
@@ -1427,7 +1577,7 @@ def selected_font_files(family: str) -> list[Path]:
 
 
 def public_design(stage: Path, screens: list[dict], log=lambda message: None,
-                  primary_screen: int = 0, excluded_panels=None) -> dict:
+                  primary_screen: int = 0, excluded_panels=None, settings_review=None) -> dict:
     """Build a visual-only tree, never a copy of the user's private backup."""
     home = stage / "home"
     home.mkdir()
@@ -1446,6 +1596,24 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
     seen = set()
     exported_fonts = set()
     export_primary = primary_screen
+    setting_actions = settings_review if settings_review is not None else []
+    schema_cache = {}
+
+    def schema_for(base, plugin):
+        cache_key = (base, plugin)
+        if cache_key not in schema_cache:
+            schema_cache[cache_key] = {}
+            if _safe_asset_name(plugin):
+                for root in sources:
+                    package = extension_package(root, base, plugin)
+                    if package is not None:
+                        try:
+                            schema_cache[cache_key] = read_setting_schema(package / 'contents/config/main.xml')
+                        except (OSError, ValueError, ET.ParseError) as error:
+                            setting_actions.append({'component': plugin, 'key': 'main.xml', 'action': 'review',
+                                'solution': 'Schema reparieren oder Erweiterung aus vertrauenswürdiger Quelle aktualisieren: ' + type(error).__name__})
+                        break
+        return schema_cache[cache_key]
 
     def copy_asset(src: Path, rel: str, allowed_root: Path):
         nonlocal copied_bytes, copied_count
@@ -1538,6 +1706,33 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
             if allowed_layout_groups is not None:
                 values = [row for row in values if row[0] in allowed_layout_groups]
             values = primary_layout_values(values, export_primary)
+        specs = {}
+        widget_owners = {}
+        if filename == 'kwinrc':
+            groups = {g for g, _, _ in values}
+            groups |= {'[Script-' + k[:-7] + ']' for g, k, v in values
+                       if g == '[Plugins]' and k.endswith('Enabled') and v == 'true'
+                       and any(extension_package(root, 'kwin/scripts', k[:-7]) for root in sources)}
+            for group in sorted(groups):
+                match = re.fullmatch(r'\[(Script|Effect)-([\w.-]+)\]', group)
+                if match:
+                    schema = schema_for('kwin/scripts' if match[1] == 'Script' else 'kwin/effects', match[2])
+                    specs.update({(group, key): spec for key, spec in schema.items()})
+        elif filename == 'plasma-org.kde.plasma.desktop-appletsrc':
+            for group, key, plugin in list(values):
+                if key == 'plugin' and re.fullmatch(r'\[Containments\]\[\d+\]\[Applets\]\[\d+\]', group):
+                    widget_owners[group] = plugin
+                    for setting, spec in schema_for('plasma/plasmoids', plugin).items():
+                        subgroup = spec.get('group') or 'General'
+                        if re.fullmatch(r'[A-Za-z0-9_ -]+', subgroup):
+                            specs[(group + '[Configuration][' + subgroup + ']', setting)] = spec
+        existing = {(g, k) for g, k, _ in values}
+        for (group, key), spec in sorted(specs.items()):
+            default = spec.get('default')
+            if (group, key) not in existing and default is not None:
+                action, normalized, _ = portable_setting(key, default.strip(), spec)
+                if action == 'copy':
+                    values.append((group, key, normalized))
         lines, group_before = [], None
         for group, key, value in values:
             if key == 'launchers' and filename == 'plasma-org.kde.plasma.desktop-appletsrc':
@@ -1546,11 +1741,34 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                     omitted.append(filename + ':launcher-paths-normalized-or-omitted')
                 value = normalized
             enabled_effect = filename == "kwinrc" and group == "[Plugins]" and key.endswith("Enabled")
+            extension_setting = ((filename == 'kwinrc' and bool(re.fullmatch(r'\[(?:Script|Effect)-[\w.-]+\]|\[Round-Corners\]', group)))
+                                 or (group, key) in specs)
+            extension_extra = False
+            if extension_setting and key not in {'globalSettings', 'launchers'}:
+                action, replacement, solution = portable_setting(key, value, specs.get((group, key)))
+                if action != 'copy':
+                    setting_actions.append({'component': filename + ':' + group, 'key': key,
+                                            'action': action, 'solution': solution})
+                if action == 'review':
+                    omitted.append(filename + ':' + key)
+                    continue
+                value = replacement
+                extension_extra = True
+            desktop_extra = filename == 'kwinrc' and group == '[Desktops]' and key in {'Number', 'Rows'}
+            if desktop_extra and (not value.isdigit() or not 1 <= int(value) <= 100):
+                raise ValueError('Ungültige Anzahl/Reihen virtueller Arbeitsflächen')
             layout_extra = (key not in VISUAL_KEYS
                             and filename == "plasma-org.kde.plasma.desktop-appletsrc"
                             and share_layout_setting_allowed(key, value))
-            if key not in VISUAL_KEYS and not enabled_effect and not layout_extra:
+            if key not in VISUAL_KEYS and not enabled_effect and not layout_extra and not extension_extra and not desktop_extra:
                 omitted.append(filename + ":" + key)
+                owner = next((plugin for prefix, plugin in widget_owners.items()
+                              if group.startswith(prefix + '[Configuration]')), None)
+                if owner:
+                    _, _, solution = portable_setting(key, value)
+                    setting_actions.append({'component': owner + ' — ' + group, 'key': key,
+                                            'action': 'review', 'solution': solution +
+                                            ' Widget-Einstellungen öffnen; bis ein Adapter vorhanden ist, diesen Wert am Ziel setzen.'})
                 continue
             if "\x00" in value or len(value) > (256000 if layout_extra and key == "globalSettings" else 8192):
                 omitted.append(filename + ":" + key)
@@ -1568,7 +1786,7 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                 copy_asset(wallpaper, rel, wallpaper.parent)
                 value = "file://" + HOME_TOKEN + "/" + rel
             elif (("/" in value or "\\" in value or "://" in value or str(HOME) in value)
-                  and not layout_extra):
+                  and not layout_extra and not extension_extra):
                 omitted.append(filename + ":" + key)
                 continue
             if filename == "kdeglobals":
@@ -1669,6 +1887,7 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
             "created": datetime.now().isoformat(timespec="seconds"),
             "profile": profile, "paths": sorted(set(paths)),
             "requirements": requirements, "omitted_settings": len(omitted),
+            "settings_review_count": sum(row['action'] == 'review' for row in setting_actions),
             "layout": exported_layout,
             "layout_warnings": panel_layout_warnings(exported_layout, source_width),
             "categories": [], "with_packages": False}
@@ -2379,7 +2598,7 @@ class ShareWorker(QThread):
     failed = pyqtSignal(str)
 
     def __init__(self, screens, code="", dest=None, styles=None, recheck=False,
-                 primary_screen=0, manage_session=False, excluded_panels=None):
+                 primary_screen=0, manage_session=False, excluded_panels=None, accept_review=False):
         super().__init__()
         self.screens, self.code, self.dest = screens, code, dest
         self.styles = styles or []
@@ -2387,6 +2606,7 @@ class ShareWorker(QThread):
         self.primary_screen = primary_screen
         self.manage_session = manage_session
         self.excluded_panels = excluded_panels
+        self.accept_review = accept_review
 
     def run(self):
         try:
@@ -2421,14 +2641,19 @@ class ShareWorker(QThread):
                 with tempfile.TemporaryDirectory(prefix="sdd-share-") as tmp:
                     root = Path(tmp)
                     session = PlasmaSession() if self.manage_session else None
+                    settings_review = []
                     try:
                         if session:
                             self.log.emit('Aktuelles Layout sichern: Plasma wird während der lokalen Paketerstellung kurz angehalten.')
                             session.stop()
-                        manifest = public_design(root, self.screens, self.log.emit, self.primary_screen, self.excluded_panels)
+                        manifest = public_design(root, self.screens, self.log.emit, self.primary_screen,
+                                                 self.excluded_panels, settings_review)
                     finally:
                         if session:
                             session.start()
+                    if settings_review and not self.accept_review:
+                        self.ready.emit('', {'manifest': manifest, 'settings_review': settings_review})
+                        return
                     path = root / "design.sdd"
                     with tarfile.open(path, "w:gz") as archive:
                         for rel in manifest["paths"]:
@@ -2865,6 +3090,7 @@ class RestoreWorker(QThread):
 
     def run(self):
         session = PlasmaSession() if self.manage_session else None
+        self.imported_kwin = {}
         try:
             if self.public:
                 manifest = inspect_public_archive(Path(self.archive))
@@ -2938,6 +3164,27 @@ class RestoreWorker(QThread):
                 # escaping HOME and cycles remain blocked.
                 for rel in rel_paths:
                     safe_public_restore_target(rel)
+
+                kwin = src_home / '.config/kwinrc'
+                if self.public and '.config/kwinrc' in rel_paths and kwin.is_file():
+                    current = HOME / '.config/kwinrc'
+                    for group, key, value in read_kconfig(kwin):
+                        self.imported_kwin.setdefault(group, {})[key] = value
+                    desired = self.imported_kwin.get('[Desktops]', {}).get('Number')
+                    if desired and self.manage_session:
+                        dbus = next((shutil.which(name) for name in ('qdbus6', 'qdbus', 'qdbus-qt6', 'qdbus-qt5')
+                                     if shutil.which(name)), None)
+                        current_count = (_run_cmd([dbus, 'org.kde.KWin', '/VirtualDesktopManager',
+                                                  'org.kde.KWin.VirtualDesktopManager.count'], 30) if dbus else None)
+                        if current_count is None or not current_count.strip().isdigit():
+                            raise ValueError('Virtuelle Arbeitsflächen nicht prüfbar. Qt-DBus-Werkzeuge installieren und in einer KDE-Sitzung erneut importieren.')
+                        if int(current_count.strip()) > int(desired):
+                            raise ValueError(f'Dieses Design verwendet {desired} virtuelle Arbeitsflächen. '
+                                             'Vor dem Import in Systemeinstellungen → Fensterverwaltung → Virtuelle Arbeitsflächen '
+                                             'überzählige Arbeitsflächen entfernen. Noch keine Design-Einstellungen geändert.')
+                    kwin.write_text(merge_design_kconfig(
+                        kwin.read_text(encoding='utf-8'),
+                        current.read_text(encoding='utf-8') if current.is_file() else ''), encoding='utf-8')
 
                 if session and '.config/plasma-org.kde.plasma.desktop-appletsrc' in rel_paths:
                     self.log.emit('Plasma wird kurz angehalten; offene Programme bleiben geöffnet.')
@@ -3024,6 +3271,19 @@ class RestoreWorker(QThread):
 
                 if src_home.exists():
                     self._post_restore()
+                    if self.public and self.manage_session and self.imported_kwin:
+                        dbus = next((shutil.which(name) for name in ('qdbus6', 'qdbus', 'qdbus-qt6', 'qdbus-qt5')
+                                     if shutil.which(name)), None)
+                        if not dbus:
+                            raise ValueError('qdbus fehlt: Qt-DBus-Werkzeuge mit dem Paketmanager installieren, dann Import wiederholen.')
+                        activate_kwin_design(self.imported_kwin, dbus)
+                        actual = {(group, key): value for group, key, value in read_kconfig(HOME / '.config/kwinrc')}
+                        mismatches = [group + '/' + key for group, values in self.imported_kwin.items()
+                                      for key, value in values.items() if actual.get((group, key)) != value
+                                      and not (group == '[Desktops]' and re.match(r'(?:Id|Name)_', key))]
+                        if mismatches:
+                            raise ValueError('KWin-Einstellungen wurden nach dem Laden verändert: ' + ', '.join(mismatches[:10]) +
+                                             '. Erweiterungsversionen abgleichen und Import nach erneuter Anmeldung wiederholen.')
 
                 if session:
                     session.start()
@@ -3384,6 +3644,26 @@ class MainWindow(QMainWindow):
             self._share_failed(details)
             return
         manifest = details["manifest"]
+        if details.get('settings_review'):
+            rows = details['settings_review']
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle('Design-Einstellungen prüfen / Review design settings')
+            dialog.setText('Noch nichts hochgeladen. Für nicht portable Einstellungen wurden konkrete Lösungen ermittelt. '
+                           'Unter Details stehen Erweiterung, Schlüssel und Vorgehen. '
+                           '„Ja“ bestätigt: lokale Filter zurücksetzen und nicht sicher übertragbare Werte auslassen. '
+                           '„Nein“: Export abbrechen und zunächst Einstellungen/Erweiterung anpassen. '
+                           'Ein Export mit Auslassungen ist keine vollständige Kopie.')
+            dialog.setInformativeText('\n\n'.join(row['component'] + ' / ' + row['key'] + ': ' + row['solution']
+                                                   for row in rows[:3]) +
+                                      (f'\n\nWeitere {len(rows) - 3} Einträge unter Details.' if len(rows) > 3 else ''))
+            dialog.setDetailedText('\n\n'.join(row['component'] + ' / ' + row['key'] + '\n' + row['solution'] for row in rows))
+            dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            dialog.setDefaultButton(QMessageBox.StandardButton.No)
+            if dialog.exec() == QMessageBox.StandardButton.Yes:
+                previous = self.share_worker
+                self._start_share(ShareWorker(screen_profile(), primary_screen=previous.primary_screen,
+                                  manage_session=True, excluded_panels=previous.excluded_panels, accept_review=True), 'share_upload')
+            return
         self.share_log.append(f"{T('share_details')}: {len(manifest['paths'])} files")
         self.share_log.append(f"{T('share_omitted')}: {manifest.get('omitted_settings', 0)} settings")
         for warning in manifest.get("layout_warnings", []):

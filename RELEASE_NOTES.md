@@ -1,4 +1,30 @@
-# SaveYourKDEDesign 1.7.9
+# SaveYourKDEDesign 1.8.0
+
+Update BOTH computers and generate a new code. Previously omitted settings
+cannot be recovered from an old public design archive.
+
+- Preserve portable numeric/boolean settings for KWin scripts and effects,
+  including Krohnkite gaps/layout order and Glass/Blur brightness, saturation,
+  decoration and corner settings. Support window-class filters.
+- Discover data-only KConfigXT schemas for installed widgets/scripts/effects;
+  include safe declared defaults. Schemas never authorize credentials, commands,
+  private text or arbitrary file references.
+- Identify settings requiring review before upload, with component, key and a
+  concrete remediation proposal. Do not include raw private values in reports.
+  The user must explicitly accept omissions/local-filter resets or cancel.
+- Transfer virtual desktop count and rows, not source desktop IDs/names. A pager
+  on an imported panel can otherwise remain invisible with one target desktop.
+- Merge KWin values without deleting unrelated target preferences. Reload
+  affected enabled scripts, create missing virtual desktops and verify count
+  and script loading. Do not silently remove target workspaces containing windows.
+
+QC: 117 offline tests pass. Real-source export checked without uploading or
+changing the source desktop. Fedora graphical end-to-end validation is still
+required. Arbitrary third-party app settings, free text and structured private
+formats require reviewed adapters; universal pixel-identical rendering is not
+guaranteed. Existing installation, panel and wallpaper checks remain in place.
+
+## Previous release: 1.7.9
 
 Update the application on BOTH the exporting and importing computer, then create
 a fresh code. Old packages cannot recover previously omitted launcher entries.

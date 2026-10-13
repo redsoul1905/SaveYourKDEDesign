@@ -11,7 +11,18 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.7.9** · [Changelog](#changelog)
+**Current version: 1.8.0** · [Changelog](#changelog)
+
+**New in 1.8.0:** export portable Krohnkite and Glass/Blur settings, discover
+KConfigXT settings/defaults for installed widgets and KWin scripts, and transfer
+virtual desktop count/rows without publishing desktop names or identities.
+Before uploading, settings needing attention are identified with a proposed
+resolution. Cancelling leaves nothing uploaded; continuing explicitly accepts
+the listed omissions/resets. Unknown free text, commands and private data are
+not automatically published. This is not a universal arbitrary-app backup.
+Imported KWin values are merged with unrelated target preferences; affected
+enabled scripts are reloaded. Missing virtual desktops are created; excess
+target workspaces require explicit adjustment to avoid moving windows silently.
 
 **New in 1.7.9:** synchronize the source desktop before creating a public design;
 stop the target Plasma shell before writing settings and restart it afterwards.
