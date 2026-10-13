@@ -108,7 +108,7 @@ class ExtensionSettingsTests(unittest.TestCase):
                 app.activate_kwin_design({}, 'qdbus6')
 
     def test_review_stops_before_network_upload(self):
-        self.config('kwinrc', '[Script-example]\nCustomText=personal\n')
+        self.config('kwinrc', '[Script-example]\nGapSize=12\nCustomText=personal\n')
         worker = app.ShareWorker([])
         outcomes, errors = [], []
         worker.ready.connect(lambda code, details: outcomes.append((code, details)))
