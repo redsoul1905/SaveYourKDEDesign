@@ -1,4 +1,28 @@
-# SaveYourKDEDesign 1.8.2
+# SaveYourKDEDesign 1.8.3
+
+- Stop exporting source taskbar launchers. On public import, preserve the
+  receiver's primary-screen pins (deduplicated), or start empty using the new
+  checkbox. The import rule also protects against launcher lists in old codes.
+- Bundle selected hicolor widget icons, including the CachyOS start icon;
+  previously hicolor was only declared as a system dependency. For old codes,
+  use start-here-kde if the original start-menu icon is neither bundled nor
+  available on the receiver.
+- Explicitly disable requested-off effects before loading requested-on effects,
+  reconfigure each enabled effect, and check that it is loaded. A load failure
+  or missing required effect must not produce a successful-import message.
+- Handle redundant kwin4_effect_glass keys alongside the current glass ID.
+  Do not enable a separate ShapeCorners effect if the source explicitly disables
+  it. Glass corner-radius settings remain preserved.
+
+QC: 135 offline tests pass. The supplied zzuq40 archive was checksum-verified:
+Glass blur/radius settings were present, the start icon was not bundled, source
+pins were included, and ShapeCorners was disabled. A new source-only export
+verifies icon bundling, exclusion of source pins and retained Glass radii.
+No real desktop was imported during development. Actual blur rendering on the
+Fedora target still needs graphical verification; plugin/driver incompatibility
+cannot be repaired merely by copying configuration.
+
+## Previous release: 1.8.2
 
 - Preserve Window Buttons' validated button order and standard Breeze/Plasma
   appearance selections.

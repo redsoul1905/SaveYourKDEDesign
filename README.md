@@ -11,7 +11,15 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.8.2** · [Changelog](#changelog)
+**Current version: 1.8.3** · [Changelog](#changelog)
+
+**New in 1.8.3:** never import the author's pinned taskbar applications. Keep the
+receiver's primary-screen pins by default, or uncheck “Keep my pinned apps” to
+start empty. This also applies to old codes. New exports bundle selected hicolor
+widget icons (including distro start-menu icons); old codes fall back to a KDE
+start icon if theirs is unavailable. Explicitly load, reconfigure and verify
+required KWin effects instead of equating “installed” with “active”. Disabled
+effects remain disabled; rounded corners may be provided by Glass itself.
 
 **New in 1.8.2:** reviewed adapters for Window Buttons order, PlasMusic text
 presentation and Karousel relative widths, including safe installed schema

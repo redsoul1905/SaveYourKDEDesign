@@ -49,7 +49,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.8.2"
+VERSION = "1.8.3"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -612,7 +612,7 @@ TRANSLATIONS["en"].update({
     "share_review": "The downloaded package has passed the file and checksum checks. Themes and widgets may contain executable code. Only apply designs from authors you trust. Your current settings will be backed up first. Full visual identity cannot be verified automatically.",
     "share_blocked": "Import checks found remaining differences. Available automatic installations are offered next. No design settings have been changed:\n\n",
     "share_apply": "Apply this design?", "share_error": "Sharing failed",
-    "share_complete": "Design applied and Plasma restarted. Check the wallpaper, panels and widgets. Missing applications behind pinned launchers are not installed automatically.",
+    "share_complete": "Design applied and Plasma restarted. Check the wallpaper, panels and widgets. Pinned apps were retained or cleared according to your selection; source launchers were not imported.",
     "share_details": "Package contents", "share_omitted": "Not exported",
     "share_install": "Install the missing Kvantum theme engine using this system's package manager? Administrator authentication is required. Only the locally defined package is installed; no commands from the design package are run. Remaining compatibility differences will be checked again afterwards.",
     "share_installing": "Installing the missing theme engine …",
@@ -635,7 +635,7 @@ TRANSLATIONS["de"].update({
     "share_review": "Dateien und Prüfsumme des Downloads wurden geprüft. Themes und Widgets können ausführbaren Code enthalten. Wende nur Designs vertrauenswürdiger Autoren an. Deine bisherigen Einstellungen werden zuerst gesichert. Eine identische Darstellung lässt sich nicht automatisch bestätigen.",
     "share_blocked": "Die Import-Prüfung hat noch Unterschiede gefunden. Verfügbare automatische Installationen werden anschließend angeboten. Noch keine Design-Einstellungen geändert:\n\n",
     "share_apply": "Dieses Design anwenden?", "share_error": "Teilen fehlgeschlagen",
-    "share_complete": "Design übernommen und Plasma neu gestartet. Bitte Wallpaper, Panels und Widgets prüfen. Fehlende Anwendungen hinter angehefteten Symbolen werden nicht automatisch installiert.",
+    "share_complete": "Design übernommen und Plasma neu gestartet. Bitte Wallpaper, Panels und Widgets prüfen. Angeheftete Programme wurden gemäß deiner Auswahl beibehalten oder geleert; Quell-Verknüpfungen wurden nicht importiert.",
     "share_details": "Paketinhalt", "share_omitted": "Nicht exportiert",
     "share_install": "Fehlende Kvantum-Theme-Engine mit der Paketverwaltung dieses Systems installieren? Dafür ist eine Administrator-Anmeldung nötig. Installiert wird nur das im Programm festgelegte Paket; keine Befehle aus dem Design-Paket. Anschließend werden verbleibende Kompatibilitätsunterschiede erneut geprüft.",
     "share_installing": "Fehlende Theme-Engine wird installiert …",
@@ -1044,6 +1044,28 @@ def portable_launchers(value: str) -> str:
     return ','.join(result)
 
 
+def repair_launcher_icons(text: str, staged_home: Path, available=None) -> str:
+    """Older codes may reference a distro icon not present on the receiver."""
+    available = available or QIcon.hasThemeIcon
+    preamble, blocks = _kconfig_blocks(text)
+    launchers = {group for group, lines in blocks if any(line in {
+        'plugin=org.kde.plasma.kickoff', 'plugin=org.kde.plasma.kicker',
+        'plugin=org.kde.plasma.kickerdash'} for line in lines)}
+    output = list(preamble)
+    for group, lines in blocks:
+        output.append(group)
+        for line in lines:
+            if group in {g + '[Configuration][General]' for g in launchers} and line.startswith('icon='):
+                name = line[5:]
+                bundled = _safe_asset_name(name) and any(
+                    path.is_file() for suffix in ('.svg', '.png', '.svgz')
+                    for path in (staged_home / '.local/share/icons').rglob(name + suffix))
+                if not bundled and not available(name):
+                    line = 'icon=start-here-kde'
+            output.append(line)
+    return '\n'.join(output) + '\n'
+
+
 def share_layout_setting_allowed(key: str, value: str) -> bool:
     """Permit typed visual values, never arbitrary text from unknown widgets."""
     lowered = key.casefold().replace("-", "").replace("_", "")
@@ -1375,12 +1397,25 @@ def _screen_containments(blocks, screen: int):
 def merge_primary_applet_config(source: str, target: str,
                                 source_primary: int, target_primary: int,
                                 id_mapping: dict | None = None,
-                                target_activity: str = '') -> str:
+                                target_activity: str = '', preserve_pins: bool = True) -> str:
     """Replace only the target primary-screen containments and retain all others."""
     target_preamble, target_blocks = _kconfig_blocks(target)
     _, source_blocks = _kconfig_blocks(source)
     source_ids = _screen_containments(source_blocks, source_primary)
     target_ids = _screen_containments(target_blocks, target_primary)
+    # Pinned applications belong to the receiver, not the shared visual design.
+    target_pins = []
+    for group, lines in target_blocks:
+        match = re.fullmatch(r'\[Containments\]\[(\d+)\]\[Applets\]\[\d+\]', group)
+        if preserve_pins and match and match[1] in target_ids and any(line in {
+                'plugin=org.kde.plasma.icontasks', 'plugin=org.kde.plasma.taskmanager'} for line in lines):
+            for pin in _block_values(target_blocks, group + '[Configuration][General]').get('launchers', '').split(','):
+                if pin and pin not in target_pins:
+                    target_pins.append(pin)
+    task_groups = {group + '[Configuration][General]' for group, lines in source_blocks
+                   if any(line in {'plugin=org.kde.plasma.icontasks', 'plugin=org.kde.plasma.taskmanager'} for line in lines)}
+    existing_groups = {group for group, _ in source_blocks}
+    source_blocks += [(group, []) for group in sorted(task_groups - existing_groups)]
     if not target_activity:
         for group, lines in target_blocks:
             if re.fullmatch(r'\[Containments\]\[\d+\]', group):
@@ -1426,11 +1461,15 @@ def merge_primary_applet_config(source: str, target: str,
         updated = []
         for line in lines:
             key, sep, value = line.partition("=")
+            if group in task_groups and key == 'launchers':
+                continue
             if sep and top and key == "lastScreen":
                 value = str(target_primary)
             elif sep and key in {"containmentId", "SystrayContainmentId", "AppletOrder"}:
                 value = re.sub(r"\d+", lambda m: mapping.get(m.group(0), m.group(0)), value)
             updated.append(key + sep + value if sep else line)
+        if group in task_groups:
+            updated.append('launchers=' + ','.join(target_pins))
         if top and target_activity and any(line in {'plugin=org.kde.plasma.folder', 'plugin=org.kde.desktopcontainment'} for line in lines):
             updated = [line for line in updated if not line.startswith('activityId=')]
             updated.append('activityId=' + target_activity)
@@ -1501,7 +1540,7 @@ def merge_design_kconfig(source: str, target: str) -> str:
                      for line in [group, *(key + '=' + value for key, value in settings.items())]) + '\n'
 
 
-def activate_kwin_design(settings: dict, dbus: str):
+def activate_kwin_design(settings: dict, dbus: str, required_effects=()):
     """Apply imported script settings and desktop count without restarting KWin."""
     def call(path, method, *args):
         result = _run_cmd([dbus, 'org.kde.KWin', path, method, *map(str, args)], 30)
@@ -1544,10 +1583,43 @@ def activate_kwin_design(settings: dict, dbus: str):
     # reconfigure is queued by KWin; wait before starting scripts from refreshed config.
     time.sleep(0.5)
     call('/Scripting', 'org.kde.kwin.Scripting.start')
+    activate_kwin_effects(settings.get('[Plugins]', {}), call, required_effects)
     for plugin in scripts:
         if call('/Scripting', 'org.kde.kwin.Scripting.isScriptLoaded', plugin) != 'true':
             raise ValueError('KWin-Skript nicht geladen: ' + plugin +
                              '. In Systemeinstellungen → KWin-Skripte aktivieren; Plasma-Kompatibilität prüfen.')
+
+
+def activate_kwin_effects(plugins, call, required_effects=()):
+    """Availability is not activation: explicitly reload and verify effects."""
+    if not plugins:
+        return
+    prefix = 'org.kde.kwin.Effects.'
+    available = set(call('/Effects', prefix + 'listOfEffects').splitlines())
+    # Disable requested effects first, especially competing blur implementations.
+    for key, value in plugins.items():
+        name = key.removesuffix('Enabled')
+        if key.endswith('Enabled') and value == 'false' and name in available:
+            call('/Effects', prefix + 'unloadEffect', name)
+    for key, value in plugins.items():
+        if not key.endswith('Enabled') or value != 'true':
+            continue
+        name = key[:-7]
+        if name not in available:
+            successor = name.removeprefix('kwin4_effect_')
+            if successor != name and successor in available and plugins.get(successor + 'Enabled') == 'true':
+                continue  # Historical duplicate key, not a second plugin.
+            if name in required_effects or name in {'glass', 'blur', 'kwin4_effect_shapecorners'}:
+                raise ValueError('KWin erkennt den benötigten Effekt nicht: ' + name +
+                                 '. Passendes Effektpaket für die installierte KWin-Version installieren und erneut anmelden.')
+            continue  # Scripts are handled separately; preflight checks missing requirements.
+        if call('/Effects', prefix + 'isEffectLoaded', name) != 'true':
+            if call('/Effects', prefix + 'loadEffect', name) != 'true':
+                raise ValueError('Effekt installiert, aber nicht ladbar: ' + name +
+                                 '. Passende Version für Plasma/KWin installieren und Grafiktreiber prüfen.')
+        call('/Effects', prefix + 'reconfigureEffect', name)
+        if call('/Effects', prefix + 'isEffectLoaded', name) != 'true':
+            raise ValueError('Effekt wurde nicht aktiv: ' + name + '. Import nicht vollständig abgeschlossen.')
 
 
 def panel_layout_snapshot(applet_config: str, views_config: str, screen: int) -> list[dict]:
@@ -1860,10 +1932,7 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                 omitted.append(filename + ':' + key)
                 continue
             if key == 'launchers' and filename == 'plasma-org.kde.plasma.desktop-appletsrc':
-                normalized = portable_launchers(value)
-                if normalized != value:
-                    omitted.append(filename + ':launcher-paths-normalized-or-omitted')
-                value = normalized
+                continue  # Receiver keeps its own pinned applications.
             enabled_effect = filename == "kwinrc" and group == "[Plugins]" and key.endswith("Enabled")
             extension_setting = ((filename == 'kwinrc' and bool(re.fullmatch(r'\[(?:Script|Effect)-[\w.-]+\]|\[Round-Corners\]', group)))
                                  or (group, key) in specs or adapted is not None)
@@ -1947,6 +2016,18 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                 asset("plasma/wallpapers", value)
             if filename == "plasma-org.kde.plasma.desktop-appletsrc" and key == "plugin":
                 asset("plasma/plasmoids", value)
+            if filename == 'plasma-org.kde.plasma.desktop-appletsrc' and key == 'icon' and _safe_asset_name(value):
+                # Selected themes are already bundled. App/distro icons in hicolor
+                # were previously excluded with the whole application-icon tree.
+                for root in sources:
+                    icon_root = root / 'icons/hicolor'
+                    candidates = sorted(icon_root.rglob(value + '.svg')) if icon_root.is_dir() else []
+                    if not candidates and icon_root.is_dir():
+                        candidates = sorted(icon_root.rglob(value + '.png'))
+                    if candidates:
+                        icon = candidates[0]
+                        copy_asset(icon, '.local/share/icons/hicolor/' + str(icon.relative_to(icon_root)), icon_root)
+                        break
             if filename == "kwinrc" and key == "library":
                 requirements.append({"kind": "decoration", "name": value})
             if filename == "kwinrc" and key == "theme" and value.startswith("__aurorae__svg__"):
@@ -3201,7 +3282,7 @@ class RestoreWorker(QThread):
 
     def __init__(self, archive: str, categories: list[str] | None = None,
                  rollback: bool = True, public: bool = False,
-                 screens=None, styles=None, primary_screen=0, manage_session=False):
+                 screens=None, styles=None, primary_screen=0, manage_session=False, preserve_pins=True):
         super().__init__()
         self.archive = archive
         self.categories = categories   # None = alles aus dem Archiv
@@ -3211,6 +3292,7 @@ class RestoreWorker(QThread):
         self.styles = styles or []
         self.primary_screen = primary_screen
         self.manage_session = manage_session
+        self.preserve_pins = preserve_pins
 
     def run(self):
         session = PlasmaSession() if self.manage_session else None
@@ -3334,6 +3416,8 @@ class RestoreWorker(QThread):
                     layout_rel = ".config/plasma-org.kde.plasma.desktop-appletsrc"
                     layout = src_home / layout_rel
                     if self.public and layout_rel in rel_paths and layout.is_file():
+                        if self.manage_session:
+                            layout.write_text(repair_launcher_icons(layout.read_text(encoding='utf-8'), src_home), encoding='utf-8')
                         target = HOME / layout_rel
                         target_text = target.read_text(encoding="utf-8") if target.is_file() else ""
                         source_primary = manifest.get("profile", {}).get("primary_screen", 0)
@@ -3342,7 +3426,7 @@ class RestoreWorker(QThread):
                         layout.write_text(merge_primary_applet_config(
                             layout.read_text(encoding="utf-8"), target_text,
                             source_primary, target_primary, mapping,
-                            session.activity if session else ''), encoding="utf-8")
+                            session.activity if session else '', self.preserve_pins), encoding="utf-8")
                         shell_rel = ".config/plasmashellrc"
                         if shell_rel in rel_paths:
                             shell = src_home / shell_rel
@@ -3407,7 +3491,8 @@ class RestoreWorker(QThread):
                                      if shutil.which(name)), None)
                         if not dbus:
                             raise ValueError('qdbus fehlt: Qt-DBus-Werkzeuge mit dem Paketmanager installieren, dann Import wiederholen.')
-                        activate_kwin_design(self.imported_kwin, dbus)
+                        activate_kwin_design(self.imported_kwin, dbus,
+                                             {row['name'] for row in manifest.get('requirements', []) if row.get('kind') == 'effect'})
                         actual = {(group, key): value for group, key, value in read_kconfig(HOME / '.config/kwinrc')}
                         mismatches = [group + '/' + key for group, values in self.imported_kwin.items()
                                       for key, value in values.items() if actual.get((group, key)) != value
@@ -3598,6 +3683,7 @@ class MainWindow(QMainWindow):
         self.lang_combo.setEnabled(not busy)
         self.share_export_btn.setEnabled(not busy)
         self.share_import_btn.setEnabled(not busy)
+        self.share_keep_pins.setEnabled(not busy)
         self.pkg_btn.setEnabled(not busy)
         self.plasma_btn.setEnabled(not busy)
 
@@ -3673,6 +3759,10 @@ class MainWindow(QMainWindow):
         self.share_export_btn.clicked.connect(self.export_code)
         layout.addWidget(self.share_export_btn)
         layout.addWidget(QLabel(T("share_last_code")))
+        self.share_keep_pins = QCheckBox('Eigene angeheftete Programme beim Import behalten / Keep my pinned apps')
+        self.share_keep_pins.setChecked(True)
+        self.share_keep_pins.setToolTip('Deaktivieren: ohne angeheftete Programme starten. Verknüpfungen aus dem Code werden nie übernommen.')
+        layout.addWidget(self.share_keep_pins)
         self.share_code = QLineEdit()
         self.share_code.setReadOnly(True)
         self.share_code.setAccessibleName(T("share_code"))
@@ -4122,7 +4212,8 @@ class MainWindow(QMainWindow):
         self._public_restore = public
         self.restore_worker = RestoreWorker(archive, categories, rollback, public,
                                             screen_profile(), styles if styles is not None else QStyleFactory.keys(),
-                                            primary_screen_index(), manage_session=True)
+                                            primary_screen_index(), manage_session=True,
+                                            preserve_pins=self.share_keep_pins.isChecked() if public else True)
         self.restore_worker.log.connect(self.restore_log.append)
         self.restore_worker.progress.connect(self.restore_progress.setValue)
         self.restore_worker.finished_ok.connect(self._restore_done)

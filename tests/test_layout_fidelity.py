@@ -116,7 +116,7 @@ class LayoutFidelityTests(unittest.TestCase):
         self.assertTrue(app.share_layout_setting_allowed('launchers', result))
         self.assertNotIn('/home/', result)
 
-    def test_export_keeps_portable_launcher_list(self):
+    def test_export_excludes_source_launcher_list(self):
         self.config('plasma-org.kde.plasma.desktop-appletsrc',
                     '[Containments][1]\nlastScreen=0\nplugin=org.kde.panel\n'
                     '[Containments][1][Applets][2][Configuration][General]\n'
@@ -125,7 +125,7 @@ class LayoutFidelityTests(unittest.TestCase):
         stage.mkdir()
         with patch.object(app, 'desktop_profile', return_value=PROFILE):
             app.public_design(stage, [])
-        self.assertIn('launchers=applications:Some Game.desktop,preferred://filemanager',
+        self.assertNotIn('launchers=',
                       (stage / 'home/.config/plasma-org.kde.plasma.desktop-appletsrc').read_text())
 
     def test_wallpaper_desktop_binds_to_target_activity(self):
