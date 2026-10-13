@@ -11,7 +11,27 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.7.8** · [Changelog](#changelog)
+**Current version: 1.7.9** · [Changelog](#changelog)
+
+**New in 1.7.9:** synchronize the source desktop before creating a public design;
+stop the target Plasma shell before writing settings and restart it afterwards.
+Both operations require confirmation and leave applications/KWin running.
+Use the systemd user service when active, otherwise KDE's quit tool and a direct
+shell start. Bind imported desktop wallpaper to the receiving activity, retain
+portable pinned launchers and validate real widget order, panel alignment/length
+mode and wallpaper through Plasma after import. An unsuccessful check is reported
+as a failure, not a successful identical restore.
+
+Update **both computers** before creating a fresh code. The layout transfer is
+distribution-independent within compatible KDE Plasma sessions; automatic native
+dependency installation still depends on available supported package sources.
+Pinned launchers do not install their applications or games. No exhaustive
+graphical test across every KDE distribution has been performed.
+
+If the source already has duplicate panels, the export dialog offers to leave
+matching additional panels out of the package. This requires confirmation and
+does not remove panels from the source desktop. Different widget settings can
+still exist in panels with the same placement and widget list.
 
 **New in 1.7.8:** public designs carry a panel-fidelity contract for panel
 geometry and widget order. Imports verify that contract after Plasma has remapped
@@ -295,6 +315,16 @@ cd ~/SaveYourKDEDesign && ./install.sh --update
 - Optional: `paru`/`yay` for AUR packages, `flatpak`
 
 ## Changelog
+
+### v1.7.9
+
+- Fix launcher filtering for spaces, preferred applications and Flatpak exports.
+- Read widget order from the real containment General group.
+- Do not interpret FitContent limits as actual panel widths.
+- Rebind desktops to the receiving activity without publishing its identity.
+- Pause/resume Plasma around export/import with failure-path restart handling.
+- Verify the loaded primary panels, order, alignment, length mode and wallpaper.
+- Compare source and exported panel contracts before upload.
 
 ### v1.7.7
 

@@ -1,4 +1,36 @@
-# SaveYourKDEDesign 1.7.8
+# SaveYourKDEDesign 1.7.9
+
+Update the application on BOTH the exporting and importing computer, then create
+a fresh code. Old packages cannot recover previously omitted launcher entries.
+
+- Stop the Plasma shell gracefully while capturing a public export so pending
+  configuration is saved. Restart before upload, including on export failure.
+- Stop the receiving shell before reading/merging/writing its layout and restart
+  afterwards. Prefer the active systemd user service; support KDE's quit tool and
+  direct startup for other sessions. Applications and KWin are not terminated.
+- Bind incoming desktop wallpaper to the target's current KDE activity. Source
+  activity IDs remain excluded from public packages.
+- Normalize system/Flatpak launcher paths into desktop IDs. Preserve names with
+  spaces and preferred application URLs; omit unsafe entries individually.
+- Read AppletOrder from the actual General group and verify source versus export.
+- Fix incorrect overlap warnings for panels set to fit their content.
+- After startup, query the loaded Plasma shell for primary panel IDs, widget
+  order, alignment, length mode, floating state and configured wallpaper. Do not
+  show success if this check fails. Detailed failures are visible in the dialog.
+
+- If the source already contains matching additional panels, offer to exclude
+  those panels from the export with explicit consent; leave the source desktop
+  untouched. Revalidate the choice after Plasma has saved its configuration.
+
+Validation: 107 offline tests, including shell lifecycle/failure handling and
+rejection of wrong wallpapers, extra panels and changed widget order. KDE's live
+read-only interface was checked on the source; no desktop was restored during
+development. Fedora and other target desktops still require graphical validation.
+Native dependencies require distribution-specific package sources; pinned apps
+and games are not installed automatically. This is not a universal guarantee of
+pixel-identical rendering on every Plasma version, plugin and graphics driver.
+
+## Previous release: 1.7.8
 
 - Rename the primary application file to `saveyourkdedesign.py`. Keep an
   identical legacy source at `savedesktopdesign.py` so existing in-app updaters

@@ -47,7 +47,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.7.8"
+VERSION = "1.7.9"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -610,7 +610,7 @@ TRANSLATIONS["en"].update({
     "share_review": "The downloaded package has passed the file and checksum checks. Themes and widgets may contain executable code. Only apply designs from authors you trust. Your current settings will be backed up first. Full visual identity cannot be verified automatically.",
     "share_blocked": "Import checks found remaining differences. Available automatic installations are offered next. No design settings have been changed:\n\n",
     "share_apply": "Apply this design?", "share_error": "Sharing failed",
-    "share_complete": "Design files applied. Log out and back in to load the panel layout and themes. Check the result before sharing it further; identical rendering has not been verified.",
+    "share_complete": "Design applied and Plasma restarted. Check the wallpaper, panels and widgets. Missing applications behind pinned launchers are not installed automatically.",
     "share_details": "Package contents", "share_omitted": "Not exported",
     "share_install": "Install the missing Kvantum theme engine using this system's package manager? Administrator authentication is required. Only the locally defined package is installed; no commands from the design package are run. Remaining compatibility differences will be checked again afterwards.",
     "share_installing": "Installing the missing theme engine …",
@@ -633,7 +633,7 @@ TRANSLATIONS["de"].update({
     "share_review": "Dateien und Prüfsumme des Downloads wurden geprüft. Themes und Widgets können ausführbaren Code enthalten. Wende nur Designs vertrauenswürdiger Autoren an. Deine bisherigen Einstellungen werden zuerst gesichert. Eine identische Darstellung lässt sich nicht automatisch bestätigen.",
     "share_blocked": "Die Import-Prüfung hat noch Unterschiede gefunden. Verfügbare automatische Installationen werden anschließend angeboten. Noch keine Design-Einstellungen geändert:\n\n",
     "share_apply": "Dieses Design anwenden?", "share_error": "Teilen fehlgeschlagen",
-    "share_complete": "Design-Dateien übernommen. Bitte ab- und wieder anmelden, damit Panel-Layout und Themes geladen werden. Prüfe das Ergebnis; eine identische Darstellung wurde nicht bestätigt.",
+    "share_complete": "Design übernommen und Plasma neu gestartet. Bitte Wallpaper, Panels und Widgets prüfen. Fehlende Anwendungen hinter angehefteten Symbolen werden nicht automatisch installiert.",
     "share_details": "Paketinhalt", "share_omitted": "Nicht exportiert",
     "share_install": "Fehlende Kvantum-Theme-Engine mit der Paketverwaltung dieses Systems installieren? Dafür ist eine Administrator-Anmeldung nötig. Installiert wird nur das im Programm festgelegte Paket; keine Befehle aus dem Design-Paket. Anschließend werden verbleibende Kompatibilitätsunterschiede erneut geprüft.",
     "share_installing": "Fehlende Theme-Engine wird installiert …",
@@ -1020,6 +1020,28 @@ def portable_wallpaper_config(text: str, included_roots: tuple[Path, ...] = ()) 
     return "\n".join(output) + suffix, [(source, rel) for rel, source in assets.items()]
 
 
+def portable_launchers(value: str) -> str:
+    """Keep desktop IDs, never publish local file paths or executable commands."""
+    result = []
+    for item in value.split(','):
+        if item in {'preferred://filemanager', 'preferred://browser', 'preferred://mailer', 'preferred://terminal'}:
+            result.append(item)
+            continue
+        for root in ('file:///var/lib/flatpak/exports/share/applications/',
+                     'file:///usr/share/applications/',
+                     'file://' + str(HOME / '.local/share/applications') + '/',
+                     'file://' + str(HOME / '.local/share/flatpak/exports/share/applications') + '/'):
+            if item.startswith(root):
+                item = 'applications:' + urllib.parse.unquote(item[len(root):])
+                break
+        if item.startswith('applications:'):
+            name = item[len('applications:'):]
+            if (re.fullmatch(r'[\w .+&()@-]+\.desktop', name)
+                    and not name.startswith('.') and len(name) <= 255):
+                result.append(item)
+    return ','.join(result)
+
+
 def share_layout_setting_allowed(key: str, value: str) -> bool:
     """Permit typed visual values, never arbitrary text from unknown widgets."""
     lowered = key.casefold().replace("-", "").replace("_", "")
@@ -1032,13 +1054,14 @@ def share_layout_setting_allowed(key: str, value: str) -> bool:
     if any(item and len(item) >= 3 and item.casefold() in value.casefold()
            for item in identity):
         return False
+    if key == 'launchers':
+        return bool(value) and portable_launchers(value) == value
+    if key == 'icon':
+        return bool(re.fullmatch(r'[A-Za-z0-9_.+-]+', value))
     if re.search(r"(?:^|[=\s])/(?:home|root|run/user)/", value) or "file://" in value:
         return False
     if "://" in value and not value.startswith(("applications:", "preferred:")):
         return False
-    if key == "launchers":
-        return all(re.fullmatch(r"(?:applications|preferred):[A-Za-z0-9_.+-]+", item)
-                   for item in value.split(","))
     if key == "globalSettings" and len(value) <= 256000:
         # Panel Colorizer's structured appearance settings contain no free text.
         # Reject unknown text, paths and commands rather than publishing them.
@@ -1169,12 +1192,21 @@ def _screen_containments(blocks, screen: int):
 
 def merge_primary_applet_config(source: str, target: str,
                                 source_primary: int, target_primary: int,
-                                id_mapping: dict | None = None) -> str:
+                                id_mapping: dict | None = None,
+                                target_activity: str = '') -> str:
     """Replace only the target primary-screen containments and retain all others."""
     target_preamble, target_blocks = _kconfig_blocks(target)
     _, source_blocks = _kconfig_blocks(source)
     source_ids = _screen_containments(source_blocks, source_primary)
     target_ids = _screen_containments(target_blocks, target_primary)
+    if not target_activity:
+        for group, lines in target_blocks:
+            if re.fullmatch(r'\[Containments\]\[\d+\]', group):
+                values = dict(line.split('=', 1) for line in lines if '=' in line)
+                if (values.get('lastScreen') == str(target_primary)
+                        and values.get('plugin') != 'org.kde.panel' and values.get('activityId')):
+                    target_activity = values['activityId']
+                    break
     if not source_ids:
         return target if target.endswith("\n") or not target else target + "\n"
 
@@ -1217,6 +1249,9 @@ def merge_primary_applet_config(source: str, target: str,
             elif sep and key in {"containmentId", "SystrayContainmentId", "AppletOrder"}:
                 value = re.sub(r"\d+", lambda m: mapping.get(m.group(0), m.group(0)), value)
             updated.append(key + sep + value if sep else line)
+        if top and target_activity and any(line in {'plugin=org.kde.plasma.folder', 'plugin=org.kde.desktopcontainment'} for line in lines):
+            updated = [line for line in updated if not line.startswith('activityId=')]
+            updated.append('activityId=' + target_activity)
         transformed.append((remap_group(group), updated))
 
     output = list(target_preamble)
@@ -1279,7 +1314,8 @@ def panel_layout_snapshot(applet_config: str, views_config: str, screen: int) ->
                 values = dict(line.split("=", 1) for line in lines if "=" in line)
                 if applet_id.isdigit() and values.get("plugin"):
                     applets[applet_id] = values["plugin"]
-        order = [item for item in top.get("AppletOrder", "").split(";")
+        general = _block_values(applet_blocks, f"[Containments][{containment_id}][General]")
+        order = [item for item in general.get("AppletOrder", top.get("AppletOrder", "")).split(";")
                  if item in applets]
         order += [item for item in sorted(applets, key=int) if item not in order]
         view = _block_values(view_blocks, f"[PlasmaViews][Panel {containment_id}]")
@@ -1293,6 +1329,38 @@ def panel_layout_snapshot(applet_config: str, views_config: str, screen: int) ->
     return result
 
 
+def duplicate_panel_ids(layout: str, views: str, screen: int) -> list[str]:
+    blocks = _kconfig_blocks(layout)[1]
+    ids = [cid for cid in sorted(_screen_containments(blocks, screen), key=int)
+           if _block_values(blocks, f'[Containments][{cid}]').get('plugin') == 'org.kde.panel']
+    seen, duplicates = set(), []
+    for cid, snapshot in zip(ids, panel_layout_snapshot(layout, views, screen)):
+        fingerprint = json.dumps(snapshot, sort_keys=True)
+        if fingerprint in seen:
+            duplicates.append(cid)
+        seen.add(fingerprint)
+    return duplicates
+
+
+def without_panels(layout: str, excluded: set[str]) -> str:
+    preamble, blocks = _kconfig_blocks(layout)
+    excluded = set(excluded)
+    while True:
+        linked = {line.split('=', 1)[1] for group, lines in blocks
+                  if (match := re.match(r'^\[Containments\]\[(\d+)\]', group))
+                  and match[1] in excluded for line in lines
+                  if re.fullmatch(r'SystrayContainmentId=\d+', line)}
+        if linked <= excluded:
+            break
+        excluded |= linked
+    output = list(preamble)
+    for group, lines in blocks:
+        match = re.match(r'^\[Containments\]\[(\d+)\]', group)
+        if not match or match[1] not in excluded:
+            output.extend([group, *lines])
+    return '\n'.join(output) + '\n'
+
+
 def panel_layout_warnings(snapshot: list[dict], screen_width: int) -> list[str]:
     """Flag objectively overlapping panels while preserving the source layout."""
     if screen_width <= 0:
@@ -1300,6 +1368,8 @@ def panel_layout_warnings(snapshot: list[dict], screen_width: int) -> list[str]:
     spans = []
     for index, panel in enumerate(snapshot, 1):
         geometry = panel["geometry"]
+        if geometry.get('panelLengthMode') == '1':
+            continue  # FitContent: persisted maximum is not the rendered width.
         try:
             minimum = int(geometry.get("minLength", "0"))
             maximum = int(geometry.get("maxLength", "0"))
@@ -1357,10 +1427,18 @@ def selected_font_files(family: str) -> list[Path]:
 
 
 def public_design(stage: Path, screens: list[dict], log=lambda message: None,
-                  primary_screen: int = 0) -> dict:
+                  primary_screen: int = 0, excluded_panels=None) -> dict:
     """Build a visual-only tree, never a copy of the user's private backup."""
     home = stage / "home"
     home.mkdir()
+    excluded_panels = set(excluded_panels or [])
+    allowed_layout_groups = None
+    if excluded_panels:
+        layout_text = (HOME / '.config/plasma-org.kde.plasma.desktop-appletsrc').read_text(encoding='utf-8')
+        views_text = (HOME / '.config/plasmashellrc').read_text(encoding='utf-8')
+        if not excluded_panels <= set(duplicate_panel_ids(layout_text, views_text, primary_screen)):
+            raise ValueError('Panel-Auswahl hat sich geändert; bitte Export erneut starten.')
+        allowed_layout_groups = {group for group, _ in _kconfig_blocks(without_panels(layout_text, excluded_panels))[1]}
     sources = [HOME / ".local/share", Path("/usr/local/share"), Path("/usr/share")]
     requirements, omitted, paths = [], [], set()
     copied_bytes = 0
@@ -1457,9 +1535,16 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
         values = list({(g, k): (g, k, v) for g, k, v in [*defaults, *overrides]}.values())
         if filename == "plasma-org.kde.plasma.desktop-appletsrc":
             export_primary = primary_screen
+            if allowed_layout_groups is not None:
+                values = [row for row in values if row[0] in allowed_layout_groups]
             values = primary_layout_values(values, export_primary)
         lines, group_before = [], None
         for group, key, value in values:
+            if key == 'launchers' and filename == 'plasma-org.kde.plasma.desktop-appletsrc':
+                normalized = portable_launchers(value)
+                if normalized != value:
+                    omitted.append(filename + ':launcher-paths-normalized-or-omitted')
+                value = normalized
             enabled_effect = filename == "kwinrc" and group == "[Plugins]" and key.endswith("Enabled")
             layout_extra = (key not in VISUAL_KEYS
                             and filename == "plasma-org.kde.plasma.desktop-appletsrc"
@@ -1570,6 +1655,14 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
         (home / ".config/plasmashellrc").read_text(encoding="utf-8")
         if (home / ".config/plasmashellrc").is_file() else "",
         export_primary)
+    original_layout = HOME / '.config/plasma-org.kde.plasma.desktop-appletsrc'
+    original_views = HOME / '.config/plasmashellrc'
+    if original_layout.is_file():
+        source_layout = panel_layout_snapshot(
+            without_panels(original_layout.read_text(encoding='utf-8'), excluded_panels),
+            original_views.read_text(encoding='utf-8') if original_views.is_file() else '', export_primary)
+        if source_layout != exported_layout:
+            raise ValueError('Export würde Panel-Anordnung oder Widget-Reihenfolge verändern; es wurde kein Code veröffentlicht.')
     source_width = (screens[export_primary]["width"]
                     if export_primary < len(screens) else 0)
     return {"app": APP_NAME, "version": VERSION, "public_design": 1,
@@ -2286,12 +2379,14 @@ class ShareWorker(QThread):
     failed = pyqtSignal(str)
 
     def __init__(self, screens, code="", dest=None, styles=None, recheck=False,
-                 primary_screen=0):
+                 primary_screen=0, manage_session=False, excluded_panels=None):
         super().__init__()
         self.screens, self.code, self.dest = screens, code, dest
         self.styles = styles or []
         self.recheck = recheck
         self.primary_screen = primary_screen
+        self.manage_session = manage_session
+        self.excluded_panels = excluded_panels
 
     def run(self):
         try:
@@ -2325,7 +2420,15 @@ class ShareWorker(QThread):
             else:
                 with tempfile.TemporaryDirectory(prefix="sdd-share-") as tmp:
                     root = Path(tmp)
-                    manifest = public_design(root, self.screens, self.log.emit, self.primary_screen)
+                    session = PlasmaSession() if self.manage_session else None
+                    try:
+                        if session:
+                            self.log.emit('Aktuelles Layout sichern: Plasma wird während der lokalen Paketerstellung kurz angehalten.')
+                            session.stop()
+                        manifest = public_design(root, self.screens, self.log.emit, self.primary_screen, self.excluded_panels)
+                    finally:
+                        if session:
+                            session.start()
                     path = root / "design.sdd"
                     with tarfile.open(path, "w:gz") as archive:
                         for rel in manifest["paths"]:
@@ -2615,6 +2718,132 @@ class BackupWorker(QThread):
             self.failed.emit(traceback.format_exc())
 
 
+class PlasmaSession:
+    """Pause only the desktop shell, never KWin or the user's login session."""
+    def __init__(self):
+        self.mode = None
+        self.activity = ''
+        self.dbus = None
+
+    def running(self):
+        result = subprocess.run(['pgrep', '-u', str(os.getuid()), '-x', 'plasmashell'],
+                                capture_output=True, timeout=10)
+        if result.returncode not in (0, 1):
+            raise RuntimeError('Cannot check the Plasma desktop process')
+        return result.returncode == 0
+
+    def stop(self):
+        if not shutil.which('pgrep') or not shutil.which('plasmashell'):
+            raise RuntimeError('Plasma/procps fehlt. Bitte plasmashell und procps/procps-ng installieren und erneut importieren.')
+        for tool in ('qdbus6', 'qdbus', 'qdbus-qt6', 'qdbus-qt5'):
+            if shutil.which(tool):
+                value = _run_cmd([tool, 'org.kde.ActivityManager', '/ActivityManager/Activities',
+                                  'org.kde.ActivityManager.Activities.CurrentActivity'], 10) or ''
+                value = value.strip()
+                if re.fullmatch(r'[0-9a-fA-F-]{36}', value):
+                    self.activity = value
+                    self.dbus = tool
+                    break
+        if not self.activity:
+            raise RuntimeError('Aktive KDE-Aktivität nicht ermittelbar. Bitte Qt D-Bus-Werkzeuge installieren und in einer KDE-Sitzung erneut importieren.')
+        if shutil.which('systemctl'):
+            result = subprocess.run(['systemctl', '--user', 'is-active', 'plasma-plasmashell.service'],
+                                    capture_output=True, timeout=15)
+            if result.returncode == 0:
+                self.mode = 'systemd'
+                subprocess.run(['systemctl', '--user', 'stop', 'plasma-plasmashell.service'],
+                               check=True, capture_output=True, timeout=45)
+        if self.mode is None:
+            tool = next((name for name in ('kquitapp6', 'kquitapp5') if shutil.which(name)), None)
+            if not tool:
+                raise RuntimeError('kquitapp fehlt: KDE-Werkzeuge installieren und Import erneut starten.')
+            self.mode = 'direct'
+            subprocess.run([tool, 'plasmashell'], check=True, capture_output=True, timeout=30)
+        for _ in range(50):
+            if not self.running():
+                return
+            QThread.msleep(100)
+        raise RuntimeError('Plasma läuft weiter. Keine Design-Dateien wurden geschrieben; bitte erneut versuchen.')
+
+    def start(self):
+        if self.mode == 'systemd':
+            subprocess.run(['systemctl', '--user', 'start', 'plasma-plasmashell.service'],
+                           check=True, capture_output=True, timeout=45)
+        elif self.mode == 'direct' and not self.running():
+            subprocess.Popen(['plasmashell'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        if self.mode:
+            for _ in range(100):
+                if self.running():
+                    self.mode = None
+                    return
+                QThread.msleep(100)
+            raise RuntimeError('Plasma konnte nicht gestartet werden. Im Terminal: plasmashell; alternativ ab- und anmelden.')
+
+    def verify(self, layout: str, screen: int, views: str = ''):
+        """Check the loaded shell, not just the files written before startup."""
+        expected_panels, expected_images = {}, []
+        expected_geometry = {}
+        blocks = _kconfig_blocks(layout)[1]
+        view_blocks = _kconfig_blocks(views)[1]
+        for group, lines in blocks:
+            match = re.fullmatch(r'\[Containments\]\[(\d+)\]', group)
+            if not match:
+                continue
+            values = dict(line.split('=', 1) for line in lines if '=' in line)
+            if values.get('lastScreen') != str(screen):
+                continue
+            if values.get('plugin') == 'org.kde.panel':
+                order = _block_values(blocks, group + '[General]').get('AppletOrder', '')
+                expected_panels[int(match[1])] = [int(i) for i in order.split(';') if i.isdigit()]
+                view = _block_values(view_blocks, f'[PlasmaViews][Panel {match[1]}]')
+                geometry = {}
+                edge = {'3': 'top', '4': 'bottom', '5': 'left', '6': 'right'}.get(values.get('location'))
+                if edge:
+                    geometry['location'] = edge
+                for key, prop, mapping in (
+                        ('alignment', 'alignment', {'1': 'left', '2': 'right', '132': 'center'}),
+                        ('panelLengthMode', 'lengthMode', {'0': 'fill', '1': 'fit', '2': 'custom'})):
+                    if view.get(key) in mapping:
+                        geometry[prop] = mapping[view[key]]
+                if 'floating' in view:
+                    geometry['floating'] = view['floating'] in {'1', 'true'}
+                expected_geometry[int(match[1])] = geometry
+            elif values.get('activityId') == self.activity:
+                image = _block_values(blocks, group + '[Wallpaper][org.kde.image][General]').get('Image')
+                if image:
+                    expected_images.append(image)
+        script = ('var ps=panels().map(function(p){p.currentConfigGroup=["General"];'
+                  'return {id:p.id,screen:p.screen,order:p.readConfig("AppletOrder",""),widgets:p.widgetIds,'
+                  'location:p.location,alignment:p.alignment,lengthMode:p.lengthMode,floating:p.floating};});'
+                  'var ds=desktopsForActivity(currentActivity()).map(function(d){'
+                  'd.currentConfigGroup=["Wallpaper",d.wallpaperPlugin,"General"];'
+                  'return {screen:d.screen,image:d.readConfig("Image","")};});'
+                  'print(JSON.stringify({panels:ps,desktops:ds}));')
+        for _ in range(15):
+            raw = _run_cmd([self.dbus, 'org.kde.plasmashell', '/PlasmaShell',
+                            'org.kde.PlasmaShell.evaluateScript', script], 5) or ''
+            try:
+                state = json.loads(raw)
+                actual = {int(p['id']): p for p in state['panels'] if p['screen'] == screen}
+                images = [d['image'] for d in state['desktops'] if d['screen'] == screen]
+                order_ok = all(
+                    (not order or order == ([int(i) for i in actual[pid]['order'].split(';') if i.isdigit()]
+                                           if actual[pid]['order'] else actual[pid]['widgets']))
+                    and set(order).issubset(set(actual[pid]['widgets']))
+                    for pid, order in expected_panels.items() if pid in actual)
+                geometry_ok = all(actual[pid].get(key) == value
+                                  for pid, settings in expected_geometry.items() if pid in actual
+                                  for key, value in settings.items())
+                if set(actual) == set(expected_panels) and order_ok and geometry_ok and all(img in images for img in expected_images):
+                    return
+            except (ValueError, TypeError, KeyError):
+                pass
+            QThread.msleep(500)
+        raise RuntimeError('Geladenes Design stimmt nicht mit dem Import überein (Panels, Widget-Reihenfolge oder Wallpaper). '
+                           'Bitte das Importprotokoll senden; die vorherige Sicherung bleibt über Wiederherstellen verfügbar.')
+
+
 class RestoreWorker(QThread):
     log = pyqtSignal(str)
     progress = pyqtSignal(int)
@@ -2623,7 +2852,7 @@ class RestoreWorker(QThread):
 
     def __init__(self, archive: str, categories: list[str] | None = None,
                  rollback: bool = True, public: bool = False,
-                 screens=None, styles=None, primary_screen=0):
+                 screens=None, styles=None, primary_screen=0, manage_session=False):
         super().__init__()
         self.archive = archive
         self.categories = categories   # None = alles aus dem Archiv
@@ -2632,8 +2861,10 @@ class RestoreWorker(QThread):
         self.screens = screens or []
         self.styles = styles or []
         self.primary_screen = primary_screen
+        self.manage_session = manage_session
 
     def run(self):
+        session = PlasmaSession() if self.manage_session else None
         try:
             if self.public:
                 manifest = inspect_public_archive(Path(self.archive))
@@ -2708,6 +2939,10 @@ class RestoreWorker(QThread):
                 for rel in rel_paths:
                     safe_public_restore_target(rel)
 
+                if session and '.config/plasma-org.kde.plasma.desktop-appletsrc' in rel_paths:
+                    self.log.emit('Plasma wird kurz angehalten; offene Programme bleiben geöffnet.')
+                    session.stop()
+
                 if self.public or manifest.get("portable_home_token") is True:
                     for rel in rel_paths:
                         if rel in {".config/" + n for n in VISUAL_CONFIGS}:
@@ -2728,7 +2963,8 @@ class RestoreWorker(QThread):
                         mapping = {}
                         layout.write_text(merge_primary_applet_config(
                             layout.read_text(encoding="utf-8"), target_text,
-                            source_primary, target_primary, mapping), encoding="utf-8")
+                            source_primary, target_primary, mapping,
+                            session.activity if session else ''), encoding="utf-8")
                         shell_rel = ".config/plasmashellrc"
                         if shell_rel in rel_paths:
                             shell = src_home / shell_rel
@@ -2738,7 +2974,8 @@ class RestoreWorker(QThread):
                                 shell.read_text(encoding="utf-8"),
                                 current_shell.read_text(encoding="utf-8") if current_shell.is_file() else "",
                                 mapping, removed), encoding="utf-8")
-                        expected_layout = manifest.get("layout")
+                        # Older manifests used the wrong AppletOrder group.
+                        expected_layout = manifest.get("layout") if _version_tuple(manifest.get('version', '')) >= (1, 7, 9) else None
                         if expected_layout is not None:
                             applied_layout = panel_layout_snapshot(
                                 layout.read_text(encoding="utf-8"),
@@ -2788,10 +3025,24 @@ class RestoreWorker(QThread):
                 if src_home.exists():
                     self._post_restore()
 
+                if session:
+                    session.start()
+                    if self.public and layout.is_file():
+                        session.verify(layout.read_text(encoding='utf-8'), self.primary_screen,
+                                       (src_home / '.config/plasmashellrc').read_text(encoding='utf-8')
+                                       if (src_home / '.config/plasmashellrc').is_file() else '')
+                        self.log.emit('Geladene Panels, Widget-Reihenfolge und Wallpaper geprüft.')
+
                 self.progress.emit(100)
                 self.finished_ok.emit(has_packages)
         except Exception:
             self.failed.emit(traceback.format_exc())
+        finally:
+            if session and session.mode:
+                try:
+                    session.start()
+                except Exception:
+                    self.failed.emit(traceback.format_exc())
 
     def _post_restore(self):
         """Schrift-Cache, KWin und sycoca auffrischen. Fehlt eines der
@@ -3054,11 +3305,32 @@ class MainWindow(QMainWindow):
     def export_code(self):
         if self._worker_running():
             return
-        if QMessageBox.question(self, APP_NAME, T("share_consent"),
+        if QMessageBox.question(self, APP_NAME, T("share_consent") + '\n\n'
+                                'Damit das aktuelle Layout gespeichert wird, wird die Plasma-Oberfläche während '
+                                'der Paketerstellung angehalten und danach wieder gestartet. Offene Programme bleiben geöffnet. / '
+                                'The desktop shell briefly restarts to save the current layout.',
                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
-        self._start_share(ShareWorker(screen_profile(), primary_screen=primary_screen_index()), "share_upload")
+        excluded = []
+        source = HOME / '.config/plasma-org.kde.plasma.desktop-appletsrc'
+        views = HOME / '.config/plasmashellrc'
+        if source.is_file() and views.is_file():
+            duplicates = duplicate_panel_ids(source.read_text(encoding='utf-8'), views.read_text(encoding='utf-8'), primary_screen_index())
+            if duplicates:
+                choice = QMessageBox.question(self, APP_NAME,
+                    f'{len(duplicates)} zusätzliche Panels mit gleicher Position, Anordnung und Widget-Liste erkannt '
+                    f'(IDs: {", ".join(duplicates)}). Andere Widget-Einstellungen können abweichen. '
+                    'Diese zusätzlichen Panels NUR aus dem Export entfernen? Dein Desktop bleibt unverändert. '
+                    '/ Exclude these matching additional panels from the export only?',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel)
+                if choice == QMessageBox.StandardButton.Cancel:
+                    return
+                if choice == QMessageBox.StandardButton.Yes:
+                    excluded = duplicates
+        self._start_share(ShareWorker(screen_profile(), primary_screen=primary_screen_index(), manage_session=True,
+                                     excluded_panels=excluded), "share_upload")
 
     def import_code(self):
         if self._worker_running():
@@ -3428,13 +3700,18 @@ class MainWindow(QMainWindow):
         self._start_restore(archive, chosen, dlg.rollback_cb.isChecked())
 
     def _start_restore(self, archive: str, categories, rollback: bool, public: bool = False, styles=None):
+        if QMessageBox.question(self, APP_NAME,
+                'Für die Übernahme wird die Plasma-Oberfläche kurz angehalten und wieder gestartet. '
+                'Offene Anwendungen bleiben geöffnet. Jetzt anwenden? / Restart the desktop shell and apply?'
+                ) != QMessageBox.StandardButton.Yes:
+            return
         self._set_busy(True)
         self.restore_progress.setValue(0)
         self.restore_log.clear()
         self._public_restore = public
         self.restore_worker = RestoreWorker(archive, categories, rollback, public,
                                             screen_profile(), styles if styles is not None else QStyleFactory.keys(),
-                                            primary_screen_index())
+                                            primary_screen_index(), manage_session=True)
         self.restore_worker.log.connect(self.restore_log.append)
         self.restore_worker.progress.connect(self.restore_progress.setValue)
         self.restore_worker.finished_ok.connect(self._restore_done)
@@ -3483,7 +3760,7 @@ class MainWindow(QMainWindow):
         if self._public_restore:
             self.share_log.append(err)
             self._clean_share_temp()
-        QMessageBox.critical(self, APP_NAME, T("msg_restore_failed"))
+        QMessageBox.critical(self, APP_NAME, T("msg_restore_failed") + '\n\n' + err[-2500:])
 
     def _has_pkg_lists(self) -> bool:
         """True, wenn nach einem Restore Paketlisten im Home liegen."""
