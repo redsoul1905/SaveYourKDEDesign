@@ -11,7 +11,11 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.8.5** · [Changelog](#changelog)
+**Current version: 1.8.6** · [Changelog](#changelog)
+
+**New in 1.8.6:** fix the privacy-check regression for Tela/Tela-circle dark and
+light variants linking to their base theme. Only these named base themes are
+permitted; content scanning and the final upload gate remain enabled.
 
 **New in 1.8.5 — privacy correction:** inspect bundled asset contents and the
 finished archive before any upload. Block detected local identities/paths,

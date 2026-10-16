@@ -51,7 +51,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.8.5"
+VERSION = "1.8.6"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -2052,6 +2052,16 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
             # Kvantum's selected modified theme explicitly inherits the matching
             # base theme; do not permit links into any other neighbouring folder.
             related = src.with_name(src.name[:-1]) if base == 'Kvantum' and src.name.endswith('#') else None
+            # Tela variants share their application icons with the base theme.
+            # Permit only these reviewed sibling identities, not the whole
+            # icons directory (which may also contain unrelated private files).
+            icon_bases = {'Tela-dark': 'Tela', 'Tela-light': 'Tela',
+                          'Tela-circle-dark': 'Tela-circle', 'Tela-circle-light': 'Tela-circle'}
+            if base == 'icons' and name in icon_bases:
+                candidate = src.parent / icon_bases[name]
+                if (candidate.is_dir() and not candidate.is_symlink()
+                        and (candidate / 'index.theme').is_file()):
+                    related = candidate
             copy_asset(src, target_rel, src if src.is_dir() else src.parent, related)
         if base == "icons":
             for src in found:

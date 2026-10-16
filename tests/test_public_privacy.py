@@ -124,3 +124,32 @@ class PublicPrivacyTests(unittest.TestCase):
         stage = self.root / 'stage'; stage.mkdir()
         with patch.object(app, 'desktop_profile', return_value=PROFILE), self.assertRaisesRegex(ValueError, 'link leaves'):
             app.public_design(stage, [])
+
+    def test_tela_variants_can_share_public_base_icons(self):
+        for variant, base in [('Tela-dark', 'Tela'), ('Tela-light', 'Tela'),
+                              ('Tela-circle-dark', 'Tela-circle'), ('Tela-circle-light', 'Tela-circle')]:
+            with self.subTest(variant=variant):
+                self.config('kdeglobals', '[Icons]\nTheme='+variant+'\n')
+                root = self.home / '.local/share/icons'
+                (root/base/'16/apps').mkdir(parents=True, exist_ok=True)
+                (root/base/'index.theme').write_text('[Icon Theme]\nName='+base+'\n')
+                (root/base/'16/apps/test.svg').write_text('<svg/>')
+                (root/variant/'16').mkdir(parents=True, exist_ok=True)
+                (root/variant/'16/apps').symlink_to('../../'+base+'/16/apps')
+                stage = self.root/variant; stage.mkdir()
+                with patch.object(app, 'desktop_profile', return_value=PROFILE):
+                    app.public_design(stage, [])
+                self.assertEqual((stage/'home/.local/share/icons'/variant/'16/apps/test.svg').read_text(), '<svg/>')
+
+    def test_tela_base_cannot_redirect_to_private_directory(self):
+        self.config('kdeglobals', '[Icons]\nTheme=Tela-dark\n')
+        root = self.home / '.local/share/icons'
+        (root/'Tela-dark').mkdir(parents=True)
+        private = self.home/'personal'; private.mkdir()
+        (private/'index.theme').write_text('[Icon Theme]\n')
+        (private/'secret.svg').write_text('<svg/>')
+        (root/'Tela').symlink_to(private)
+        (root/'Tela-dark/apps').symlink_to('../Tela')
+        stage=self.root/'stage'; stage.mkdir()
+        with patch.object(app, 'desktop_profile', return_value=PROFILE), self.assertRaisesRegex(ValueError, 'link leaves'):
+            app.public_design(stage, [])

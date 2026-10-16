@@ -1,4 +1,14 @@
-# SaveYourKDEDesign 1.8.5
+# SaveYourKDEDesign 1.8.6
+
+- Fix an overly restrictive symlink boundary introduced in 1.8.5: Tela-dark and
+  Tela-light intentionally link to Tela; Tela-circle variants link to Tela-circle.
+- Permit only these reviewed base-theme directories with index.theme metadata.
+  Reject symlinked base directories and links escaping the approved roots.
+- Keep all content checks and the final pre-upload privacy gate. This fixes the
+  reported `Asset link leaves its theme directory: apps` error, not every possible
+  privacy finding in a design. No desktop changes or test uploads are performed.
+
+## Previous release: 1.8.5
 
 Privacy correction following a three-pass audit:
 
