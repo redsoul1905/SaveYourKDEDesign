@@ -11,7 +11,11 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.8.6** · [Changelog](#changelog)
+**Current version: 1.8.7** · [Changelog](#changelog)
+
+**New in 1.8.7:** omit empty `.placeholder`, `.gitkeep` and `.keep` asset packaging
+markers instead of blocking export. Nonempty markers and other hidden files
+remain blocked; the upload gate still rejects hidden files in finished archives.
 
 **New in 1.8.6:** fix the privacy-check regression for Tela/Tela-circle dark and
 light variants linking to their base theme. Only these named base themes are

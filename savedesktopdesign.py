@@ -51,7 +51,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.8.6"
+VERSION = "1.8.7"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -1992,6 +1992,11 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                 copy_asset(child, rel + "/" + child.name, allowed_root, related_root)
             seen.remove(real)
         elif real.is_file():
+            # Packaging markers keep empty asset directories in source control.
+            # They have no rendering role. Omit only recognised, truly empty
+            # markers; never whitelist hidden files or their contents generally.
+            if real.name in {'.placeholder', '.gitkeep', '.keep'} and real.stat().st_size == 0:
+                return
             check_public_filename(rel)
             size = real.stat().st_size
             dst = home / rel

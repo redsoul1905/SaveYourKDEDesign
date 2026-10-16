@@ -1,4 +1,14 @@
-# SaveYourKDEDesign 1.8.6
+# SaveYourKDEDesign 1.8.7
+
+- Fix the export interruption caused by AdwaitaLegacy's empty `.placeholder`.
+  Omit recognised zero-byte packaging markers (`.placeholder`, `.gitkeep`,
+  `.keep`) while collecting assets; they do not affect rendering.
+- Do not weaken the hidden-file upload rule. Nonempty markers still block export,
+  and hidden files in a finished archive still block upload.
+- Verified the reported local marker is an empty regular file. Added regression
+  coverage for omission, nonempty markers and the independent upload gate.
+
+## Previous release: 1.8.6
 
 - Fix an overly restrictive symlink boundary introduced in 1.8.5: Tela-dark and
   Tela-light intentionally link to Tela; Tela-circle variants link to Tela-circle.

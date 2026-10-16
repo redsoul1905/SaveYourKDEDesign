@@ -21,6 +21,36 @@ class PublicPrivacyTests(unittest.TestCase):
     tearDown = fixtures.SharingTests.tearDown
     config = fixtures.SharingTests.config
 
+    def test_empty_packaging_markers_are_omitted(self):
+        self.config('kdeglobals', '[Icons]\nTheme=PrivacyFixture\n')
+        icons = self.home / '.local/share/icons/PrivacyFixture'
+        icons.mkdir(parents=True)
+        (icons/'test.svg').write_text('<svg/>')
+        for name in ('.placeholder', '.gitkeep', '.keep'):
+            (icons/name).touch()
+        stage = self.root/'stage'; stage.mkdir()
+        with patch.object(app, 'desktop_profile', return_value=PROFILE):
+            result = app.public_design(stage, [])
+        self.assertTrue(any(p.endswith('test.svg') for p in result['paths']))
+        self.assertFalse(any(p.endswith(('.placeholder', '.gitkeep', '.keep')) for p in result['paths']))
+
+    def test_nonempty_packaging_markers_still_block(self):
+        self.config('kdeglobals', '[Icons]\nTheme=PrivacyFixture\n')
+        icons = self.home / '.local/share/icons/PrivacyFixture'
+        icons.mkdir(parents=True)
+        (icons/'.placeholder').write_text('private content')
+        stage = self.root/'stage'; stage.mkdir()
+        with patch.object(app, 'desktop_profile', return_value=PROFILE), self.assertRaisesRegex(ValueError, 'Datenschutz'):
+            app.public_design(stage, [])
+
+    def test_upload_gate_still_rejects_hidden_markers(self):
+        rel = '.local/share/icons/Test/.placeholder'
+        path = self.root/'unsafe.sdd'
+        archive_file(path, [('home/'+rel, b'')], manifest([rel]))
+        with patch.object(app, 'catbox_open') as network, self.assertRaises(ValueError):
+            app.upload_design(path)
+        network.assert_not_called()
+
     def test_secret_files_block_export_instead_of_copying(self):
         self.config('kdeglobals', '[Icons]\nTheme=PrivacyFixture\n')
         icons = self.home / '.local/share/icons/PrivacyFixture'
