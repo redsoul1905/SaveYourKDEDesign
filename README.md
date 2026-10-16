@@ -11,7 +11,21 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.8.8** · [Changelog](#changelog)
+**Current version: 1.9.0** · [Changelog](#changelog)
+
+**New in 1.9.0:** portable saved look-and-feel layouts (including Oct26). Active
+wallpapers are bundled under content-derived neutral names; the generated layout
+uses Plasma's `userDataPath()` on the receiver. Inactive wallpaper histories,
+source launchers, widget caches and local preset-bookmark paths are excluded;
+embedded visual preset settings remain. Only recognised serialized layout data
+is rewritten, never evaluated as source JavaScript.
+
+The reviewed legacy `cursor-follows-focus` helper is replaced in the export only
+by KWin's native `MoveMouseToFocus` action, using the standard script entry point
+and matching plugin ID. No username, local shell helper or xdotool is required.
+Import checks that the receiver exposes that action without invoking it.
+Update both computers before creating/importing a new code; old uploads are not
+retroactively changed. Original source scripts and configuration stay untouched.
 
 **New in 1.8.8:** full local export QC, not just a fix for one marker filename.
 Omit empty icon files, support bounded and sanitised SVGZ, remove SVG editor

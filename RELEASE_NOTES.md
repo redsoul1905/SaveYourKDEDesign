@@ -1,4 +1,35 @@
-# SaveYourKDEDesign 1.8.8
+# SaveYourKDEDesign 1.9.0
+
+- Replace the exact reviewed legacy cursor-follows-focus implementation in the
+  export with a native KWin MoveMouseToFocus call. Correct the plugin ID and use
+  contents/code/main.js. No source username, helper script or xdotool is shipped.
+  Unknown/custom script implementations are not silently rewritten.
+- Declare and check the required KWin action on import (read-only shortcut
+  enumeration). Both endpoints should update before using new codes.
+- Parse recognized serialized look-and-feel layouts as JSON, without evaluating
+  their source JavaScript. Bundle active file wallpapers under neutral names and
+  resolve their paths with userDataPath() on the receiving system, URI-encoding
+  spaces and special characters.
+- Remove inactive wallpaper settings/history, source launchers, widget caches
+  and local preset-bookmark paths. Preserve embedded visual preset settings.
+- Retain the mandatory privacy gate, archive limits and unchanged source files.
+  Account for extra wallpaper files created recursively by the layout adapter.
+
+QC: 174 offline tests pass, including JavaScript harness checks for a different
+receiver home and the native action call. Native action availability was checked
+read-only on the source. No test uploads, cursor movement or desktop restarts.
+A complete local export of the actual design passed the final privacy gate:
+112,697 files, 76,495,296 compressed bytes, using the independently read source
+Plasma/session profile and no GUI screen enumeration. The temporary archive was
+removed after verification; source files were not changed.
+Actual rendering and pointer movement on the target still require graphical
+verification. Existing Catbox uploads are not modified or removed.
+
+Upstream references:
+- https://develop.kde.org/docs/plasma/scripting/api/ (userDataPath)
+- https://bugs.kde.org/show_bug.cgi?id=522070 (native action and fixed KWin bug)
+
+## Previous release: 1.8.8
 
 - Root cause: filename-specific fixes and synthetic-only testing missed other
   legitimate files in the real design. Empty icon files now have a general rule,

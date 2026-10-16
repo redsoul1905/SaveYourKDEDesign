@@ -52,7 +52,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.8.8"
+VERSION = "1.9.0"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -1763,6 +1763,105 @@ class PublicPrivacyError(ValueError):
     """A failed privacy check, distinguishable from archive/resource failures."""
 
 
+PORTABLE_CURSOR_SCRIPT = '''// SaveYourKDEDesign: no shell, usernames or local helper paths.
+var activation = workspace.windowActivated || workspace.clientActivated;
+activation.connect(function(window) {
+    if (!window) return;
+    callDBus("org.kde.kglobalaccel", "/component/kwin",
+             "org.kde.kglobalaccel.Component", "invokeShortcut", "MoveMouseToFocus");
+});
+'''
+
+
+def portable_cursor_script(data: bytes):
+    text = data.decode('utf-8', errors='strict')
+    if text == PORTABLE_CURSOR_SCRIPT:
+        return data
+    # Recognise only the reviewed legacy implementation, never arbitrary code.
+    pattern = (r'workspace\.clientActivated\.connect\(function\(\)\s*\{\s*'
+               r'callDBus\("org\.kde\.krunner",\s*"/App",\s*"",\s*"run",\s*'
+               r'"/home/"\s*\+\s*\(process\.env\.USER\s*\|\|\s*"[\w.-]+"\)\s*\+\s*'
+               r'"/\.local/bin/move-cursor-to-focus\.sh"\);\s*\}\);')
+    return PORTABLE_CURSOR_SCRIPT.encode() if re.fullmatch(pattern, text.strip()) else None
+
+
+LAYOUT_PREFIX = 'var plasma = getApiVersion(1);\nvar layout = '
+LAYOUT_SUFFIX = ';\nplasma.loadSerializedLayout(layout);\n'
+PORTABLE_LAYOUT_SUFFIX = ''';
+function sydResolve(value) {
+    if (typeof value === "string") {
+        var homeUri = userDataPath().split("/").map(encodeURIComponent).join("/");
+        return value.split("file://@SDD_HOME@/").join("file://" + homeUri + "/");
+    }
+    if (value && typeof value === "object") {
+        Object.keys(value).forEach(function(key) { value[key] = sydResolve(value[key]); });
+    }
+    return value;
+}
+plasma.loadSerializedLayout(sydResolve(layout));
+'''
+
+
+def read_serialized_layout(data: bytes):
+    text = data.decode('utf-8', errors='strict')
+    match = re.match(r'\s*var plasma\s*=\s*getApiVersion\(1\);\s*var layout\s*=\s*', text)
+    if not match:
+        return None
+    try:
+        layout, end = json.JSONDecoder().raw_decode(text[match.end():])
+    except ValueError:
+        return None
+    tail = text[match.end()+end:]
+    if (not re.fullmatch(r'\s*;\s*plasma\.loadSerializedLayout\(layout\);\s*', tail)
+            and tail != PORTABLE_LAYOUT_SUFFIX):
+        return None
+    if not isinstance(layout, dict) or not isinstance(layout.get('desktops'), list) or not isinstance(layout.get('panels'), list):
+        return None
+    return layout
+
+
+def portable_saved_layout(data: bytes, bundle_wallpaper):
+    """Transform serialised data only, without evaluating the source JavaScript."""
+    layout = read_serialized_layout(data)
+    if layout is None:
+        return data  # Ordinary scripts still pass through the privacy gate.
+    for desktop in layout['desktops']:
+        if not isinstance(desktop, dict) or not isinstance(desktop.get('config', {}), dict):
+            raise ValueError('Invalid serialized desktop layout')
+        active = desktop.get('wallpaperPlugin', 'org.kde.image')
+        config = desktop.get('config', {})
+        for group in list(config):
+            if group.startswith('/Wallpaper/') and not group.startswith('/Wallpaper/' + active + '/'):
+                del config[group]  # Inactive wallpaper history is not the design.
+
+    def clean(value, depth=0):
+        if depth > 40:
+            raise ValueError('Serialized layout nesting limit exceeded')
+        if isinstance(value, dict):
+            output = {}
+            for key, item in value.items():
+                if private_setting(key) or key in {'lastPreset', 'panelWidgets', 'SlidePaths', 'launchers',
+                                                  'activityId', 'LastVideo', 'LastVideoPosition'}:
+                    continue
+                if key == 'Image' and isinstance(item, str):
+                    output[key] = bundle_wallpaper(item)
+                else:
+                    output[key] = clean(item, depth+1)
+            return output
+        if isinstance(value, list):
+            return [clean(item, depth+1) for item in value]
+        if isinstance(value, str) and value.lstrip().startswith(('{', '[')):
+            try:
+                nested = json.loads(value)
+            except ValueError:
+                return value
+            if isinstance(nested, (dict, list)):
+                return json.dumps(clean(nested, depth+1), ensure_ascii=False)
+        return value
+    result = LAYOUT_PREFIX + json.dumps(clean(layout), ensure_ascii=False, indent=2) + PORTABLE_LAYOUT_SUFFIX
+    return result.encode('utf-8')
+
+
 def privacy_block(rel: str, reason: str):
     # Never echo the matching secret or an absolute source path into an error.
     label = rel
@@ -1977,6 +2076,7 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
     setting_actions = settings_review if settings_review is not None else []
     schema_cache = {}
     privacy_issues = set()
+    asset_overrides = {}
 
     def schema_for(base, plugin):
         cache_key = (base, plugin)
@@ -2007,6 +2107,8 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
         # Resolve icon symlinks into regular files, but never follow links into
         # private directories or copy sockets/devices/compiled binaries.
         real = src.resolve(strict=True)
+        if rel == '.local/share/kwin/scripts/cursor-follows-focus/main.js' and real in asset_overrides:
+            rel = '.local/share/kwin/scripts/cursor-follows-focus/contents/code/main.js'
         if not real.is_relative_to(allowed_root.resolve()) and not (
                 related_root is not None and real.is_relative_to(related_root.resolve())):
             raise ValueError(f"Asset link leaves its theme directory: {src.name}")
@@ -2044,8 +2146,28 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                 if stream.read(4) == b"\x7fELF":
                     raise ValueError(f"Compiled plugin needs installation on the target: {src.name}")
             dst.parent.mkdir(parents=True, exist_ok=True)
-            payload = clean_public_media(real.read_bytes(), rel)
+            payload = asset_overrides.get(real, real.read_bytes())
+            if (rel.startswith('.local/share/plasma/look-and-feel/')
+                    and rel.endswith('/contents/layouts/org.kde.plasma.desktop-layout.js')):
+                def bundle_saved_wallpaper(value):
+                    raw = urllib.parse.unquote(value.removeprefix('file://')).replace(HOME_TOKEN, str(HOME))
+                    source = Path(raw)
+                    if not source.is_absolute() or not source.is_file():
+                        privacy_block(rel, 'Aktives Wallpaper des gespeicherten Layouts fehlt; Theme-Layout aktualisieren.')
+                    if source.stat().st_size > SHARE_LIMIT:
+                        raise ValueError('Saved wallpaper exceeds size limit')
+                    target = '.local/share/wallpapers/sdd/' + sha256_file(source)[:16] + source.suffix.lower()
+                    copy_asset(source, target, source.parent)
+                    return 'file://' + HOME_TOKEN + '/' + target
+                payload = portable_saved_layout(payload, bundle_saved_wallpaper)
+            payload = clean_public_media(payload, rel)
             check_public_content(payload, rel)
+            # Adapters can add wallpaper assets recursively or change size.
+            # Recompute against the updated totals, not the pre-adapter snapshot.
+            next_bytes = copied_bytes - previous_size + len(payload)
+            next_count = copied_count + (rel not in paths)
+            if next_bytes > EXPANDED_LIMIT or next_count > SHARE_FILE_LIMIT:
+                raise ValueError('Adapted design exceeds the unpacked size/file limit')
             dst.write_bytes(payload)
             copied_bytes = next_bytes
             copied_count = next_count
@@ -2086,6 +2208,21 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
         log("  + " + rel)
         # Merge lower-priority system defaults first, then user overrides.
         for src in reversed(found):
+            cursor_main = src / 'main.js' if (src / 'main.js').is_file() else src / 'contents/code/main.js'
+            if base == 'kwin/scripts' and name == 'cursor-follows-focus' and cursor_main.is_file():
+                replacement = portable_cursor_script(cursor_main.read_bytes())
+                if replacement is not None:
+                    asset_overrides[cursor_main.resolve()] = replacement
+                    metadata = src / 'metadata.json'
+                    if metadata.is_file():
+                        info = json.loads(metadata.read_text())
+                        info['KPlugin']['Id'] = name
+                        info['KPlugin']['Version'] = '1.1'
+                        info.pop('X-Plasma-MainScript', None)  # Standard contents/code/main.js entry point.
+                        asset_overrides[metadata.resolve()] = json.dumps(info, ensure_ascii=False, indent=2).encode()
+                    req = {'kind': 'kwin_action', 'name': 'MoveMouseToFocus'}
+                    if req not in requirements:
+                        requirements.append(req)
             target_rel = (".config/" if base == "Kvantum" else ".local/share/") + rel
             # Kvantum's selected modified theme explicitly inherits the matching
             # base theme; do not permit links into any other neighbouring folder.
@@ -2498,7 +2635,7 @@ def inspect_public_archive(path: Path) -> dict:
             raise ValueError("Invalid requirements")
         for req in requirements:
             if (not isinstance(req, dict) or req.get("kind") not in
-                    {"asset", "style", "effect", "decoration", "font", "wallpaper"}
+                    {"asset", "style", "effect", "decoration", "font", "wallpaper", "kwin_action"}
                     or not isinstance(req.get("name"), str) or len(req["name"]) > 512):
                 raise ValueError("Invalid component requirement")
         return manifest
@@ -2556,6 +2693,14 @@ def compatibility_issues(manifest: dict, current: dict, styles: list[str]) -> li
     effects = None
     for req in manifest["requirements"]:
         kind, name = req["kind"], req["name"]
+        if kind == 'kwin_action':
+            command = next((shutil.which(n) for n in ('qdbus6', 'qdbus', 'qdbus-qt6') if shutil.which(n)), None)
+            actions = (_run_cmd([command, 'org.kde.kglobalaccel', '/component/kwin',
+                                  'org.kde.kglobalaccel.Component.shortcutNames'], 10) if command else '') or ''
+            if name in actions.splitlines():
+                continue
+            issues.append('KWin-Aktion fehlt: ' + name + '. KDE-Sitzung und Qt-DBus-Werkzeuge prüfen; Plasma aktualisieren.')
+            continue
         if kind == "asset" and share_path_allowed(".local/share/" + name):
             if any((root / name).exists() for root in
                    (HOME / ".local/share", Path("/usr/local/share"), Path("/usr/share"))):
