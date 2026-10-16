@@ -1,4 +1,27 @@
-# SaveYourKDEDesign 1.8.7
+# SaveYourKDEDesign 1.8.8
+
+- Root cause: filename-specific fixes and synthetic-only testing missed other
+  legitimate files in the real design. Empty icon files now have a general rule,
+  including AdwaitaLegacy's `.empty`; they are omitted, never uploaded.
+- Support SVGZ with bounded decompression, SVG metadata cleanup, inspection of
+  decompressed contents and deterministic recompression. Arbitrary gzip archives
+  remain blocked. Remove legacy SVG `docbase` editor paths as well.
+- Distinguish `/home/*/` and `/home/[^/]+/` program templates from personal paths;
+  real user paths elsewhere in the same file are still blocked.
+- Omit Breeze's duplicated compiled icon cache only when the normal SVG theme
+  tree and index are present. Keep the actual vector assets.
+- Collect privacy failures from all assets and generated configurations before
+  stopping. Show a compact dialog with the complete list under Details; never
+  upload a partial design after skipping an unsafe component.
+
+QC: 168 offline tests pass. Two complete local export passes used the actual
+source design without stopping Plasma or uploading anything. The second pass
+reduced 149 findings to two genuine personal-reference files in a custom KWin
+script and a saved look-and-feel layout. Those need separate reviewed cleanup;
+this is NOT a claim that the current design can already be anonymously uploaded.
+No private source configuration or scripts were modified.
+
+## Previous release: 1.8.7
 
 - Fix the export interruption caused by AdwaitaLegacy's empty `.placeholder`.
   Omit recognised zero-byte packaging markers (`.placeholder`, `.gitkeep`,

@@ -1,5 +1,6 @@
 """Privacy regressions use synthetic data, never upload or touch a desktop."""
 import struct
+import gzip
 import zlib
 import unittest
 from unittest.mock import patch
@@ -26,13 +27,74 @@ class PublicPrivacyTests(unittest.TestCase):
         icons = self.home / '.local/share/icons/PrivacyFixture'
         icons.mkdir(parents=True)
         (icons/'test.svg').write_text('<svg/>')
-        for name in ('.placeholder', '.gitkeep', '.keep'):
+        for name in ('.placeholder', '.gitkeep', '.keep', '.empty', '.other-empty-marker', 'empty-icon'):
             (icons/name).touch()
         stage = self.root/'stage'; stage.mkdir()
         with patch.object(app, 'desktop_profile', return_value=PROFILE):
             result = app.public_design(stage, [])
         self.assertTrue(any(p.endswith('test.svg') for p in result['paths']))
-        self.assertFalse(any(p.endswith(('.placeholder', '.gitkeep', '.keep')) for p in result['paths']))
+        self.assertEqual([p for p in result['paths'] if '/icons/' in p], ['.local/share/icons/PrivacyFixture/test.svg'])
+
+    def test_all_privacy_findings_are_reported_together(self):
+        self.config('kdeglobals', '[Icons]\nTheme=PrivacyFixture\n')
+        icons = self.home / '.local/share/icons/PrivacyFixture'; icons.mkdir(parents=True)
+        (icons/'.env').write_text('API_TOKEN=fixture')
+        (icons/'script.js').write_text('const path = "/home/alice/private";')
+        stage = self.root/'stage'; stage.mkdir()
+        with patch.object(app, 'desktop_profile', return_value=PROFILE), self.assertRaises(app.PublicPrivacyError) as error:
+            app.public_design(stage, [])
+        self.assertIn('2 Datenschutz-Hindernisse', str(error.exception))
+        self.assertIn('.env', str(error.exception))
+        self.assertIn('script.js', str(error.exception))
+        self.assertNotIn('/home/alice/', str(error.exception))
+
+    def test_generic_home_templates_are_not_personal_paths(self):
+        for value in (b'/home/*/.local', b'/^\\/home\\/[^/]+\\/\\.local/.test(path)'):
+            app.check_public_content(value, 'general.qml')
+        with self.assertRaises(app.PublicPrivacyError):
+            app.check_public_content(b'/home/*/.local; /home/alice/private', 'general.qml')
+
+    def test_svgz_is_bounded_sanitized_and_idempotent(self):
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><metadata>/home/alice/private</metadata><rect width="1"/></svg>'
+        result = app.clean_public_media(gzip.compress(svg), 'image.svgz')
+        self.assertNotIn(b'/home/', gzip.decompress(result))
+        self.assertIn(b'rect', gzip.decompress(result))
+        self.assertEqual(app.clean_public_media(result, 'image.svgz'), result)
+        for data in (b'not gzip', gzip.compress(b'x'*4_000_001), gzip.compress(b'<svg><text>/home/alice/private</text></svg>')):
+            with self.assertRaises(app.PublicPrivacyError):
+                app.clean_public_media(data, 'image.svgz')
+
+    def test_svg_docbase_removed_without_removing_graphics(self):
+        data = b'<svg xmlns:s="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" s:docbase="/home/alice/art"><path d="M0 0"/></svg>'
+        clean = app.clean_public_media(data, 'icon.svg')
+        self.assertNotIn(b'docbase', clean)
+        self.assertIn(b'M0 0', clean)
+
+    def test_final_gate_inspects_compressed_svg_content(self):
+        rel='.local/share/icons/Test/image.svgz'; path=self.root/'compressed.sdd'
+        archive_file(path, [('home/'+rel, gzip.compress(b'<svg><text>/home/alice/private</text></svg>'))], manifest([rel]))
+        with patch.object(app, 'catbox_open') as network, self.assertRaises(app.PublicPrivacyError):
+            app.upload_design(path)
+        network.assert_not_called()
+
+    def test_breeze_duplicate_cache_omitted_when_svg_tree_exists(self):
+        self.config('kdeglobals', '[Icons]\nTheme=breeze\n')
+        icons=self.home/'.local/share/icons/breeze'
+        (icons/'actions').mkdir(parents=True); (icons/'apps').mkdir()
+        (icons/'index.theme').write_text('[Icon Theme]\nName=Breeze\n')
+        (icons/'apps/test.svg').write_text('<svg/>')
+        (icons/'breeze-icons.rcc').write_bytes(b'/home/alice/editor-path')
+        # Hide system copies so this test exercises only its isolated fixture.
+        stage=self.root/'stage'; stage.mkdir()
+        original_exists=app.Path.exists
+        def exists(path):
+            if str(path).startswith(('/usr/share/', '/usr/local/share/')):
+                return False
+            return original_exists(path)
+        with patch.object(app, 'desktop_profile', return_value=PROFILE), patch.object(app.Path, 'exists', exists):
+            result=app.public_design(stage, [])
+        self.assertFalse(any(p.endswith('.rcc') for p in result['paths']))
+        self.assertTrue(any(p.endswith('test.svg') for p in result['paths']))
 
     def test_nonempty_packaging_markers_still_block(self):
         self.config('kdeglobals', '[Icons]\nTheme=PrivacyFixture\n')

@@ -14,6 +14,7 @@ Sprachen: Deutsch, English, Français, Italiano, Español, Português, Türkçe
 import io
 import configparser
 import hashlib
+import gzip
 import json
 import os
 import platform
@@ -51,7 +52,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.8.7"
+VERSION = "1.8.8"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -1758,13 +1759,17 @@ def selected_font_files(family: str) -> list[Path]:
     return sorted(found)
 
 
+class PublicPrivacyError(ValueError):
+    """A failed privacy check, distinguishable from archive/resource failures."""
+
+
 def privacy_block(rel: str, reason: str):
     # Never echo the matching secret or an absolute source path into an error.
     label = rel
     for identity in (str(HOME), os.environ.get('USER', ''), socket.gethostname()):
         if len(identity) >= 3:
             label = re.sub(re.escape(identity), '[privat]', label, flags=re.I)
-    raise ValueError('Datenschutz: Upload gesperrt / upload blocked: ' + label + '. ' + reason
+    raise PublicPrivacyError('Datenschutz: Upload gesperrt / upload blocked: ' + label + '. ' + reason
                      + ' Datei lokal bereinigen oder eine unveränderte öffentliche Version der Erweiterung verwenden; dann neu exportieren.')
 
 
@@ -1787,7 +1792,9 @@ def check_public_content(data: bytes, rel: str):
     if any(len(v) >= 3 and re.search(r'(?<![\w])' + re.escape(v) + r'(?![\w])', text, re.I)
            for v in identities):
         privacy_block(rel, 'Persönlicher Benutzer-/Rechnerbezug gefunden.')
-    if re.search(r'(?:/home/[^/\s"\'<>]+/|/Users/[^/\s"\'<>]+/|/(?:mnt|media|run/media)/|[A-Z]:[\\/]Users[\\/])', text, re.I):
+    # Literal shell/regex templates describe any home, not a user's identity.
+    path_text = text.replace('/home/*/', '/GENERIC_HOME/').replace('/home/[^/]+/', '/GENERIC_HOME/')
+    if re.search(r'(?:/home/[^/\s"\'<>]+/|/Users/[^/\s"\'<>]+/|/(?:mnt|media|run/media)/|[A-Z]:[\\/]Users[\\/])', path_text, re.I):
         privacy_block(rel, 'Lokaler persönlicher Dateipfad gefunden.')
     if re.search(r'-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:gh[pousr]_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16})\b', text):
         privacy_block(rel, 'Schlüsselmaterial oder Zugangstoken gefunden.')
@@ -1802,6 +1809,18 @@ def clean_public_media(data: bytes, rel: str) -> bytes:
     Malformed or unsupported metadata containers fail closed. ICC profiles are
     retained because they affect rendering. No interpretation of visible pixels.
     """
+    if Path(rel).suffix.lower() == '.svgz':
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(data)) as stream:
+                expanded = stream.read(4_000_001)
+            if len(expanded) > 4_000_000:
+                privacy_block(rel, 'SVGZ überschreitet die sichere entpackte Größe.')
+            cleaned = clean_public_media(expanded, rel[:-1])
+            check_public_content(cleaned, rel)
+            # Deterministic header: no original filename or timestamp.
+            return gzip.compress(cleaned, mtime=0)
+        except (OSError, EOFError, zlib.error):
+            privacy_block(rel, 'Beschädigte SVGZ-Datei.')
     if data.startswith((b'PK\x03\x04', b'\x1f\x8b', b'SQLite format 3', b'7z\xbc\xaf\x27\x1c', b'\x7fELF')):
         privacy_block(rel, 'Eingebetteter Container oder ausführbare Binärdatei kann nicht anonym geprüft werden.')
     # Removing EXIF orientation must not silently rotate the visible design.
@@ -1907,7 +1926,7 @@ def clean_public_media(data: bytes, rel: str) -> bytes:
                     if child.tag.split('}')[-1] in {'metadata', 'namedview'}:
                         parent.remove(child); changed = True
                 for key in list(parent.attrib):
-                    if key.split('}')[-1] in {'absref', 'docname', 'export-filename'}:
+                    if key.split('}')[-1] in {'absref', 'docname', 'docbase', 'export-filename'}:
                         del parent.attrib[key]; changed = True
             if changed:
                 return ET.tostring(tree, encoding='utf-8')
@@ -1957,6 +1976,7 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
     export_primary = primary_screen
     setting_actions = settings_review if settings_review is not None else []
     schema_cache = {}
+    privacy_issues = set()
 
     def schema_for(base, plugin):
         cache_key = (base, plugin)
@@ -1975,6 +1995,12 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
         return schema_cache[cache_key]
 
     def copy_asset(src: Path, rel: str, allowed_root: Path, related_root: Path | None = None):
+        try:
+            copy_asset_checked(src, rel, allowed_root, related_root)
+        except PublicPrivacyError as error:
+            privacy_issues.add(str(error))
+
+    def copy_asset_checked(src: Path, rel: str, allowed_root: Path, related_root: Path | None = None):
         nonlocal copied_bytes, copied_count
         if not share_path_allowed(rel):
             raise ValueError("Invalid public asset destination")
@@ -1995,7 +2021,14 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
             # Packaging markers keep empty asset directories in source control.
             # They have no rendering role. Omit only recognised, truly empty
             # markers; never whitelist hidden files or their contents generally.
-            if real.name in {'.placeholder', '.gitkeep', '.keep'} and real.stat().st_size == 0:
+            if real.stat().st_size == 0 and (rel.startswith('.local/share/icons/')
+                    or real.name in {'.placeholder', '.gitkeep', '.keep', '.empty'}):
+                return
+            # Breeze ships a compiled duplicate of its SVG tree. Do not publish
+            # embedded editor metadata from that opaque acceleration cache.
+            if (real.name == 'breeze-icons.rcc' and rel.startswith('.local/share/icons/breeze/')
+                    and (real.parent / 'index.theme').is_file()
+                    and (real.parent / 'actions').is_dir() and (real.parent / 'apps').is_dir()):
                 return
             check_public_filename(rel)
             size = real.stat().st_size
@@ -2270,6 +2303,21 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
         (home / rel).parent.mkdir(parents=True, exist_ok=True)
         (home / rel).write_text("[General]\ntheme=" + theme + "\n")
         paths.add(rel)
+    # Inspect all generated configurations too, before reporting findings once.
+    # Never upload a partial design merely because an unsafe asset was omitted.
+    for rel in sorted(paths):
+        if rel.startswith('.config/'):
+            try:
+                check_public_filename(rel)
+                check_public_content((home / rel).read_bytes(), rel)
+            except PublicPrivacyError as error:
+                privacy_issues.add(str(error))
+    if privacy_issues:
+        findings = sorted(privacy_issues)
+        raise PublicPrivacyError(
+            f'Export-Prüfung abgeschlossen: {len(findings)} Datenschutz-Hindernisse. '
+            'Nichts hochgeladen. Alle betroffenen Dateien werden gemeinsam gemeldet:\n\n'
+            + '\n\n'.join(findings))
     if not paths:
         raise ValueError("No shareable KDE design found")
     profile = desktop_profile(screens)
@@ -4264,7 +4312,16 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         self.share_log.append(str(error))
         self._clean_share_temp()
-        QMessageBox.warning(self, T("share_error"), str(error))
+        if 'Export-Prüfung abgeschlossen:' in str(error):
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle(T('share_error'))
+            dialog.setIcon(QMessageBox.Icon.Warning)
+            dialog.setText(str(error).split('\n\n', 1)[0])
+            dialog.setInformativeText('Die vollständige Liste steht unter Details. Dein Desktop wurde nicht verändert; es wurde nichts veröffentlicht.')
+            dialog.setDetailedText(str(error))
+            dialog.exec()
+        else:
+            QMessageBox.warning(self, T("share_error"), str(error))
 
     # ---------------- Backup-Tab ----------------
     def _build_backup_tab(self) -> QWidget:

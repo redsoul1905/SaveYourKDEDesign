@@ -11,7 +11,14 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.8.7** · [Changelog](#changelog)
+**Current version: 1.8.8** · [Changelog](#changelog)
+
+**New in 1.8.8:** full local export QC, not just a fix for one marker filename.
+Omit empty icon files, support bounded and sanitised SVGZ, remove SVG editor
+`docbase` metadata, and recognise generic home-directory patterns in source code.
+The duplicated Breeze resource cache is omitted when its SVG tree is present.
+Collect privacy findings across assets and generated configurations and show
+them together under Details. Real personal references still stop publication.
 
 **New in 1.8.7:** omit empty `.placeholder`, `.gitkeep` and `.keep` asset packaging
 markers instead of blocking export. Nonempty markers and other hidden files
