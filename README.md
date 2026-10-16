@@ -11,7 +11,14 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.8.3** · [Changelog](#changelog)
+**Current version: 1.8.4** · [Changelog](#changelog)
+
+**New in 1.8.4:** offer installation of missing ShapeCorners / KDE Rounded
+Corners through the maintainer's Fedora COPR or verified Arch AUR package,
+choosing the target's Wayland/X11 variant. Installation still requires consent
+and authentication; the import is checked again afterwards. Existing codes work:
+update the receiving computer, then import again. Other distributions receive
+the upstream installation guide, not Fedora or Arch commands.
 
 **New in 1.8.3:** never import the author's pinned taskbar applications. Keep the
 receiver's primary-screen pins by default, or uncheck “Keep my pinned apps” to

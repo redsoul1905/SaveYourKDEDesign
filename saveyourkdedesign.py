@@ -49,7 +49,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.8.3"
+VERSION = "1.8.4"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -2634,7 +2634,11 @@ def community_extension_plan(manifest: dict, current: dict, issues: list[str]) -
     distro = system.get("ID", "")
     if "arch" in system.get("ID_LIKE", "").split():
         distro = "arch"
+    corners_package = ("kwin-effect-rounded-corners-x11-git" if current.get("session") == "x11"
+                       else "kwin-effect-rounded-corners-git")
     known = {
+        ("effect", "kwin4_effect_shapecorners"): (
+            corners_package, "https://github.com/matinlotfali/KDE-Rounded-Corners"),
         ("decoration", "org.kde.klassy"): ("klassy", "https://github.com/paulmcauley/klassy"),
         ("effect", "glass"): ("kwin-effects-glass-git", "https://github.com/4v3ngR/kwin-effects-glass"),
         ("effect", "kwin4_effect_glass"): ("kwin-effects-glass-git", "https://github.com/4v3ngR/kwin-effects-glass"),
@@ -2652,6 +2656,7 @@ def community_extension_plan(manifest: dict, current: dict, issues: list[str]) -
         commands = ["sudo dnf install -y dnf5-plugins || sudo dnf install -y dnf-plugins-core"]
         wants_klassy = any(package == "klassy" for package in result["packages"])
         wants_glass = any(package == "kwin-effects-glass-git" for package in result["packages"])
+        wants_corners = corners_package in result["packages"]
         fedora_packages = []
         if wants_klassy:
             commands.extend(["sudo dnf copr enable -y errornointernet/klassy",
@@ -2661,6 +2666,11 @@ def community_extension_plan(manifest: dict, current: dict, issues: list[str]) -
             commands.extend(["sudo dnf copr enable -y ama1470/kwin-effects-glass",
                              "sudo dnf install -y kwin-effects-glass"])
             fedora_packages.append("kwin-effects-glass")
+        if wants_corners:
+            package = "kwin-effect-roundcorners" + ("-x11" if current.get("session") == "x11" else "")
+            commands.extend(["sudo dnf copr enable -y matinlotfali/KDE-Rounded-Corners",
+                             "sudo dnf install -y " + package])
+            fedora_packages.append(package)
         result["packages"] = fedora_packages
         script = "set -e; " + "; ".join(commands)
         result["manual_command"] = script.removeprefix("set -e; ")
@@ -2671,12 +2681,17 @@ def community_extension_plan(manifest: dict, current: dict, issues: list[str]) -
             result["terminal"] = terminal
             result["kind"] = "fedora_copr"
             result["notes"].append(
-                "Fedora: Die bestätigten COPR-Paketquellen für Klassy/Glass werden nach Zustimmung aktiviert. "
+                "Fedora: Die zugeordneten COPR-Paketquellen werden nach Zustimmung aktiviert. "
                 "COPR sind von der Gemeinschaft gepflegte Drittanbieterquellen; im Terminal wird dein Passwort abgefragt.")
         else:
             result["notes"].append("Fedora-Terminalbefehle: " + result["manual_command"])
         return result
     if distro != "arch":
+        if corners_package in result["packages"]:
+            result["notes"].append(
+                "Rounded Corners (ShapeCorners): Installiere die zur Distribution, Plasma-Version und "
+                "Sitzung passenden Pakete nach der Entwickleranleitung und wiederhole den Import: "
+                "https://github.com/matinlotfali/KDE-Rounded-Corners#installation")
         if any(package == "klassy" for package in result["packages"]):
             result["notes"].append(
                 "Klassy: Verwende die offiziellen Pakete des Entwicklers: "

@@ -1,4 +1,24 @@
-# SaveYourKDEDesign 1.8.3
+# SaveYourKDEDesign 1.8.4
+
+- Fix the missing installation-source mapping for `kwin4_effect_shapecorners`.
+  Fedora offers the maintainer's `matinlotfali/KDE-Rounded-Corners` COPR and
+  `kwin-effect-roundcorners`; Arch/CachyOS offers the verified
+  `kwin-effect-rounded-corners-git` AUR package. X11 uses the respective X11
+  variant. Third-party installation requires user consent and authentication.
+- Reuse the existing installation/recheck workflow; do not hide a missing effect
+  or report success without checking it. Other distributions get the maintainer's
+  instructions. Unknown effects are never mapped to arbitrary archive commands.
+- Existing codes remain compatible: update the receiver and retry the import.
+
+Upstream installation recipes: https://github.com/matinlotfali/KDE-Rounded-Corners#installation
+
+QC: 142 offline tests. The reported s7xw22 archive's checksum was verified and
+its manifest explicitly requires ShapeCorners. No packages were installed and
+no desktop configuration was changed on the development computer. Real Fedora
+rendering and availability of a compatible COPR build still require target-side
+verification; these are not implied by the offline tests.
+
+## Previous release: 1.8.3
 
 - Stop exporting source taskbar launchers. On public import, preserve the
   receiver's primary-screen pins (deduplicated), or start empty using the new
