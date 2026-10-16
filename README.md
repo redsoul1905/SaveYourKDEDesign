@@ -11,7 +11,16 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.8.4** · [Changelog](#changelog)
+**Current version: 1.8.5** · [Changelog](#changelog)
+
+**New in 1.8.5 — privacy correction:** inspect bundled asset contents and the
+finished archive before any upload. Block detected local identities/paths,
+credential assignments, hidden files, backups and embedded containers. Strip
+supported PNG/JPEG/WebP metadata and SVG editor metadata without recompressing
+pixels. Unsupported media and EXIF-rotated images require local preparation;
+personal references in scripts require a clean public version, not blind code
+rewrites. This does not remove previously uploaded files or guarantee anonymity
+of visible images, custom text, encoded data or unrecognised personal content.
 
 **New in 1.8.4:** offer installation of missing ShapeCorners / KDE Rounded
 Corners through the maintainer's Fedora COPR or verified Arch AUR package,
@@ -257,11 +266,19 @@ packages; older codes remain supported in 1.7.0.
 settings and the selected themes, icons, cursor themes, wallpapers, fonts, widgets
 and available KWin scripts/effects. System-wide selected theme assets are copied
 into user-level locations for portability. The export excludes the full package
-list, hostname, username, archive ownership metadata, autostart configuration,
-arbitrary widget commands, notes and unknown settings. The number of omitted
+list, explicit identity fields, archive ownership metadata, autostart configuration,
+arbitrary widget commands, notes and unknown settings. An independent upload gate
+blocks recognised personal paths, local identities and secret patterns in bundled
+files too. The number of omitted
 settings is shown. Selected theme/widget assets and wallpapers can themselves
 contain personal material; review them before publishing. Only redistribute
 assets whose licenses allow it. Use the existing **Back up** tab for private backups.
+
+The SDD1 code is a public download reference with an integrity checksum, **not
+encryption**. Images may visibly identify people or places; arbitrary text and
+encoded content cannot be reliably anonymised by pattern matching. No promise
+of complete anonymity is made. The upload service also receives the connection's
+IP address. Old uploads are unaffected by installing a corrected program version.
 
 **Compatibility is conservative, not a promise of pixel-identical rendering.**
 Public import currently requires the same full Plasma version and session type

@@ -1,4 +1,31 @@
-# SaveYourKDEDesign 1.8.4
+# SaveYourKDEDesign 1.8.5
+
+Privacy correction following a three-pass audit:
+
+- Bundled themes/scripts previously bypassed configuration filtering. Check
+  asset names and content; block recognised identities, local paths, credential
+  assignments, key material, hidden files, backups and embedded containers.
+- Restrict theme symlinks to the selected theme, not neighbouring directories.
+- Remove PNG text/EXIF/time chunks, JPEG EXIF/IPTC/comments, WebP EXIF/XMP and
+  SVG editor metadata. Keep compressed pixels and rendering profiles; reject
+  rotated EXIF images and unsupported formats rather than silently changing them.
+- Exclude generic free-text `name` settings outside the Plasma theme selector.
+- Independently inspect the finished archive inside upload_design before any
+  network request. Archive structure validation alone was not a privacy check.
+- Do not blindly rewrite executable scripts. A blocked script must be cleaned
+  locally or replaced with its unmodified public upstream version.
+
+Existing uploaded files are NOT removed or retroactively anonymised. Visible
+personal material, unrecognised private text and encoded data still require
+human review. Codes are public references, not encryption. Private backups
+remain separate. No test data is uploaded and no desktop is changed by tests.
+
+QC: 157 offline tests pass, including 15 new privacy regression tests. A read-only
+check of the reported s7xw22 package rejected it at the upload gate; per-file
+inspection identified 5,182 cleanable files and 198 rejected files. Rejections
+include unsupported or suspicious content and are not a count of proven leaks.
+
+## Previous release: 1.8.4
 
 - Fix the missing installation-source mapping for `kwin4_effect_shapecorners`.
   Fedora offers the maintainer's `matinlotfali/KDE-Rounded-Corners` COPR and

@@ -42,11 +42,11 @@ class LargeIconTests(unittest.TestCase):
         for base in (".icons", ".local/share/icons"):
             path = self.home / base / "UniqueTestOverride/icon.svg"
             path.parent.mkdir(parents=True)
-            path.write_bytes(b"12345")
+            path.write_bytes(b"<svg/>")
         stage = self.root / "stage"
         stage.mkdir()
         with patch.object(app, "desktop_profile", return_value=PROFILE), \
-                patch.object(app, "EXPANDED_LIMIT", 5), patch.object(app, "SHARE_FILE_LIMIT", 1):
+                patch.object(app, "EXPANDED_LIMIT", 6), patch.object(app, "SHARE_FILE_LIMIT", 1):
             result = app.public_design(stage, [])
         self.assertIn(".local/share/icons/UniqueTestOverride/icon.svg", result["paths"])
 

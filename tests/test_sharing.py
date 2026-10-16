@@ -133,7 +133,7 @@ class SharingTests(unittest.TestCase):
 
     def test_upload_streams_multipart_and_returns_reusable_integrity_code(self):
         path = self.root / "design.sdd"
-        path.write_bytes(b"public demo")
+        archive_file(path, [("home/.config/kdeglobals", b"[General]\nColorScheme=Breeze\n")], manifest())
         captured = {}
 
         def open_request(req):
@@ -144,10 +144,10 @@ class SharingTests(unittest.TestCase):
 
         with patch.object(app, "catbox_open", side_effect=open_request):
             code = app.upload_design(path)
-        self.assertEqual(code, "SDD1:abcdef.sdd:" + hashlib.sha256(b"public demo").hexdigest())
+        self.assertEqual(code, "SDD1:abcdef.sdd:" + hashlib.sha256(path.read_bytes()).hexdigest())
         self.assertEqual(captured["length"], len(captured["body"]))
         self.assertIn(b'name="reqtype"\r\n\r\nfileupload', captured["body"])
-        self.assertIn(b"public demo", captured["body"])
+        self.assertIn(path.read_bytes(), captured["body"])
 
     def test_upload_rejects_oversize_before_network(self):
         path = self.root / "design.sdd"
@@ -159,7 +159,7 @@ class SharingTests(unittest.TestCase):
 
     def test_upload_rejects_non_catbox_response(self):
         path = self.root / "design.sdd"
-        path.write_bytes(b"1234")
+        archive_file(path, [("home/.config/kdeglobals", b"[General]\nColorScheme=Breeze\n")], manifest())
         with patch.object(app, "catbox_open", return_value=Response(b"https://evil.test/abcdef.sdd")):
             with self.assertRaises(ValueError):
                 app.upload_design(path)

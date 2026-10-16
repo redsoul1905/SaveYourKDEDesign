@@ -21,6 +21,8 @@ import re
 import shlex
 import shutil
 import socket
+import struct
+import zlib
 import subprocess
 import sys
 import tarfile
@@ -35,8 +37,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QProcess, QSettings, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QFont, QIcon, QGuiApplication
+from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QProcess, QSettings, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QFont, QIcon, QGuiApplication, QImageReader
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFileDialog, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
@@ -49,7 +51,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.8.4"
+VERSION = "1.8.5"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -1756,6 +1758,183 @@ def selected_font_files(family: str) -> list[Path]:
     return sorted(found)
 
 
+def privacy_block(rel: str, reason: str):
+    # Never echo the matching secret or an absolute source path into an error.
+    label = rel
+    for identity in (str(HOME), os.environ.get('USER', ''), socket.gethostname()):
+        if len(identity) >= 3:
+            label = re.sub(re.escape(identity), '[privat]', label, flags=re.I)
+    raise ValueError('Datenschutz: Upload gesperrt / upload blocked: ' + label + '. ' + reason
+                     + ' Datei lokal bereinigen oder eine unveränderte öffentliche Version der Erweiterung verwenden; dann neu exportieren.')
+
+
+def check_public_filename(rel: str):
+    parts = Path(rel).parts
+    if (any(p.startswith('.') and p not in {'.config', '.local'} for p in parts)
+            or Path(rel).suffix.lower() in {'.bak', '.old', '.orig', '.pem', '.key', '.p12', '.pfx',
+                                           '.sqlite', '.db', '.zip', '.tar', '.gz', '.7z'}
+            or any(p.lower() in {'id_rsa', 'id_ed25519', 'credentials', 'secrets'} for p in parts)):
+        privacy_block(rel, 'Versteckte Datei, Sicherung, Schlüssel oder nicht prüfbarer Container im Design.')
+    check_public_content(rel.encode(), rel)
+
+
+def check_public_content(data: bytes, rel: str):
+    # Decode common text encodings, including UTF-16; scan binary string tables
+    # too. This is a privacy guard, not a claim of semantic anonymisation.
+    text = data.decode('utf-16' if data.startswith((b'\xff\xfe', b'\xfe\xff')) else 'utf-8', errors='replace')
+    text = urllib.parse.unquote(text).replace('\\/', '/')
+    identities = {os.environ.get('USER', ''), HOME.name, socket.gethostname()}
+    if any(len(v) >= 3 and re.search(r'(?<![\w])' + re.escape(v) + r'(?![\w])', text, re.I)
+           for v in identities):
+        privacy_block(rel, 'Persönlicher Benutzer-/Rechnerbezug gefunden.')
+    if re.search(r'(?:/home/[^/\s"\'<>]+/|/Users/[^/\s"\'<>]+/|/(?:mnt|media|run/media)/|[A-Z]:[\\/]Users[\\/])', text, re.I):
+        privacy_block(rel, 'Lokaler persönlicher Dateipfad gefunden.')
+    if re.search(r'-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|\b(?:gh[pousr]_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16})\b', text):
+        privacy_block(rel, 'Schlüsselmaterial oder Zugangstoken gefunden.')
+    # Only literal assignments, not schema declarations such as name="password".
+    if re.search(r'''(?im)(?:^|[,{;])\s*["']?(?:password|passwd|api[_-]?key|api[_-]?token|access[_-]?token|client[_-]?secret|authorization)["']?\s*[:=]\s*["']?[^\s"'{};,]+''', text):
+        privacy_block(rel, 'Mögliche Zugangsdaten in einer eingebetteten Datei gefunden.')
+
+
+def clean_public_media(data: bytes, rel: str) -> bytes:
+    """Remove non-rendering metadata without recompressing image pixels.
+
+    Malformed or unsupported metadata containers fail closed. ICC profiles are
+    retained because they affect rendering. No interpretation of visible pixels.
+    """
+    if data.startswith((b'PK\x03\x04', b'\x1f\x8b', b'SQLite format 3', b'7z\xbc\xaf\x27\x1c', b'\x7fELF')):
+        privacy_block(rel, 'Eingebetteter Container oder ausführbare Binärdatei kann nicht anonym geprüft werden.')
+    # Removing EXIF orientation must not silently rotate the visible design.
+    if b'Exif\x00\x00' in data or b'eXIf' in data or b'EXIF' in data:
+        buffer = QBuffer(); buffer.setData(QByteArray(data)); buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+        reader = QImageReader(buffer)
+        if reader.transformation().value:
+            privacy_block(rel, 'Bild verwendet EXIF-Drehung; zuerst aufrecht und ohne Metadaten als PNG speichern.')
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        output = bytearray(data[:8]); pos = 8; ended = False
+        while pos < len(data):
+            if pos + 12 > len(data):
+                privacy_block(rel, 'Beschädigte PNG-Struktur.')
+            size = int.from_bytes(data[pos:pos+4], 'big'); end = pos + 12 + size
+            if end > len(data):
+                privacy_block(rel, 'Beschädigte PNG-Struktur.')
+            kind = data[pos+4:pos+8]; body = data[pos+8:pos+8+size]
+            if zlib.crc32(kind + body) & 0xffffffff != int.from_bytes(data[end-4:end], 'big'):
+                privacy_block(rel, 'Ungültige PNG-Prüfsumme.')
+            if kind not in {b'tEXt', b'zTXt', b'iTXt', b'eXIf', b'tIME'}:
+                # Unknown ancillary chunks can conceal unreviewed metadata.
+                if kind not in {b'IHDR', b'PLTE', b'IDAT', b'IEND', b'tRNS', b'cHRM', b'gAMA',
+                                b'iCCP', b'sBIT', b'sRGB', b'bKGD', b'hIST', b'pHYs', b'sPLT',
+                                b'acTL', b'fcTL', b'fdAT', b'cICP', b'mDCv', b'cLLi'}:
+                    privacy_block(rel, 'Unbekannter PNG-Metadatenblock.')
+                output.extend(data[pos:end])
+            pos = end
+            if kind == b'IEND':
+                ended = True
+                break
+        if not ended or pos != len(data):
+            privacy_block(rel, 'PNG enthält Zusatzdaten oder keinen Abschluss.')
+        return bytes(output)
+    if data.startswith(b'\xff\xd8'):
+        output = bytearray(data[:2]); pos = 2
+        while pos < len(data):
+            start = pos
+            if data[pos] != 255:
+                privacy_block(rel, 'Beschädigte JPEG-Struktur.')
+            while pos < len(data) and data[pos] == 255:
+                pos += 1
+            if pos >= len(data):
+                privacy_block(rel, 'Beschädigte JPEG-Struktur.')
+            marker = data[pos]; pos += 1
+            if marker == 0xd9:
+                if pos != len(data):
+                    privacy_block(rel, 'JPEG enthält angehängte Zusatzdaten.')
+                output.extend(b'\xff\xd9')
+                return bytes(output)
+            if 0xd0 <= marker <= 0xd7 or marker == 1:
+                output.extend(data[start:pos]); continue
+            if pos + 2 > len(data):
+                privacy_block(rel, 'Beschädigte JPEG-Struktur.')
+            size = int.from_bytes(data[pos:pos+2], 'big'); end = pos + size
+            if size < 2 or end > len(data):
+                privacy_block(rel, 'Beschädigte JPEG-Struktur.')
+            if marker not in {0xe1, 0xed, 0xfe}:
+                if 0xe0 <= marker <= 0xef and not (marker == 0xe0 and data[pos+2:end].startswith(b'JFIF\0')
+                                                       or marker == 0xe2 and data[pos+2:end].startswith(b'ICC_PROFILE\0')
+                                                       or marker == 0xee and data[pos+2:end].startswith(b'Adobe')):
+                    privacy_block(rel, 'Unbekannter JPEG-Metadatenblock.')
+                output.extend(data[start:end])
+            pos = end
+            if marker == 0xda:
+                # Preserve compressed scan data; resume marker parsing at the
+                # next non-stuffed, non-restart marker (also progressive JPEG).
+                scan = pos
+                while pos < len(data):
+                    if data[pos] == 255 and pos + 1 < len(data):
+                        following = data[pos+1]
+                        if following == 0 or 0xd0 <= following <= 0xd7:
+                            pos += 2; continue
+                        break
+                    pos += 1
+                output.extend(data[scan:pos])
+        privacy_block(rel, 'JPEG ohne Abschluss.')
+    if data.startswith(b'RIFF') and data[8:12] == b'WEBP':
+        if len(data) < 12 or int.from_bytes(data[4:8], 'little') + 8 != len(data):
+            privacy_block(rel, 'Beschädigte WebP-Struktur.')
+        chunks = bytearray(); pos = 12
+        while pos < len(data):
+            if pos + 8 > len(data):
+                privacy_block(rel, 'Beschädigte WebP-Struktur.')
+            kind = data[pos:pos+4]; size = int.from_bytes(data[pos+4:pos+8], 'little')
+            end = pos + 8 + size + size % 2
+            if end > len(data):
+                privacy_block(rel, 'Beschädigte WebP-Struktur.')
+            if kind not in {b'EXIF', b'XMP '}:
+                if kind not in {b'VP8 ', b'VP8L', b'VP8X', b'ALPH', b'ICCP', b'ANIM', b'ANMF'}:
+                    privacy_block(rel, 'Unbekannter WebP-Metadatenblock.')
+                chunk = bytearray(data[pos:end])
+                if kind == b'VP8X' and size:
+                    chunk[8] &= ~0x0c
+                chunks.extend(chunk)
+            pos = end
+        return b'RIFF' + struct.pack('<I', 4 + len(chunks)) + b'WEBP' + bytes(chunks)
+    if Path(rel).suffix.lower() == '.svg':
+        try:
+            tree = ET.fromstring(data)
+            changed = False
+            for parent in tree.iter():
+                for child in list(parent):
+                    if child.tag.split('}')[-1] in {'metadata', 'namedview'}:
+                        parent.remove(child); changed = True
+                for key in list(parent.attrib):
+                    if key.split('}')[-1] in {'absref', 'docname', 'export-filename'}:
+                        del parent.attrib[key]; changed = True
+            if changed:
+                return ET.tostring(tree, encoding='utf-8')
+        except ET.ParseError:
+            privacy_block(rel, 'SVG kann nicht sicher geprüft werden.')
+    # Unsupported image metadata must not silently pass. These formats need a
+    # dedicated adapter before public sharing (private backups are unaffected).
+    if Path(rel).suffix.lower() in {'.gif', '.tif', '.tiff', '.heic', '.avif', '.svgz', '.mp4', '.webm'}:
+        privacy_block(rel, 'Dieses Medienformat benötigt einen Datenschutz-Adapter; für öffentliche Designs PNG/JPEG/WebP/SVG verwenden.')
+    return data
+
+
+def audit_public_upload(path: Path):
+    """Final, independent content gate: run before any network request."""
+    inspect_public_archive(path)
+    with tarfile.open(path, 'r:gz') as archive:
+        for member in archive:
+            if (member.uid or member.gid or member.uname or member.gname
+                    or set(member.pax_headers) - {'path'}):
+                privacy_block(member.name, 'Persönliche Archiv-Metadaten gefunden.')
+            check_public_filename(member.name)
+            data = archive.extractfile(member).read()
+            if clean_public_media(data, member.name) != data:
+                privacy_block(member.name, 'Bild-Metadaten wurden nicht vollständig entfernt.')
+            check_public_content(data, member.name)
+
+
 def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                   primary_screen: int = 0, excluded_panels=None, settings_review=None) -> dict:
     """Build a visual-only tree, never a copy of the user's private backup."""
@@ -1795,23 +1974,25 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                         break
         return schema_cache[cache_key]
 
-    def copy_asset(src: Path, rel: str, allowed_root: Path):
+    def copy_asset(src: Path, rel: str, allowed_root: Path, related_root: Path | None = None):
         nonlocal copied_bytes, copied_count
         if not share_path_allowed(rel):
             raise ValueError("Invalid public asset destination")
         # Resolve icon symlinks into regular files, but never follow links into
         # private directories or copy sockets/devices/compiled binaries.
         real = src.resolve(strict=True)
-        if not real.is_relative_to(allowed_root.resolve()):
+        if not real.is_relative_to(allowed_root.resolve()) and not (
+                related_root is not None and real.is_relative_to(related_root.resolve())):
             raise ValueError(f"Asset link leaves its theme directory: {src.name}")
         if real.is_dir():
             if real in seen:
                 raise ValueError("Cyclic theme directory link")
             seen.add(real)
             for child in sorted(real.iterdir()):
-                copy_asset(child, rel + "/" + child.name, allowed_root)
+                copy_asset(child, rel + "/" + child.name, allowed_root, related_root)
             seen.remove(real)
         elif real.is_file():
+            check_public_filename(rel)
             size = real.stat().st_size
             dst = home / rel
             previous_size = dst.stat().st_size if rel in paths else 0
@@ -1825,7 +2006,9 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
                 if stream.read(4) == b"\x7fELF":
                     raise ValueError(f"Compiled plugin needs installation on the target: {src.name}")
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(real, dst)
+            payload = clean_public_media(real.read_bytes(), rel)
+            check_public_content(payload, rel)
+            dst.write_bytes(payload)
             copied_bytes = next_bytes
             copied_count = next_count
             paths.add(rel)
@@ -1866,7 +2049,10 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
         # Merge lower-priority system defaults first, then user overrides.
         for src in reversed(found):
             target_rel = (".config/" if base == "Kvantum" else ".local/share/") + rel
-            copy_asset(src, target_rel, src.parent)
+            # Kvantum's selected modified theme explicitly inherits the matching
+            # base theme; do not permit links into any other neighbouring folder.
+            related = src.with_name(src.name[:-1]) if base == 'Kvantum' and src.name.endswith('#') else None
+            copy_asset(src, target_rel, src if src.is_dir() else src.parent, related)
         if base == "icons":
             for src in found:
                 for _, key, value in read_kconfig(src / "index.theme"):
@@ -1929,6 +2115,11 @@ def public_design(stage: Path, screens: list[dict], log=lambda message: None,
             # Anonymous designs intentionally exclude personal content and caches.
             # Unknown visual formats remain actionable blockers, not silent losses.
             if private_setting(key) or (adapted and adapted[0] == 'exclude'):
+                omitted.append(filename + ':' + key)
+                continue
+            # Generic names outside the selected Plasma theme are not visual
+            # settings; in arbitrary groups they can be personal free text.
+            if key == 'name' and not (filename == 'plasmarc' and group == '[Theme]'):
                 omitted.append(filename + ':' + key)
                 continue
             if key == 'launchers' and filename == 'plasma-org.kde.plasma.desktop-appletsrc':
@@ -2119,6 +2310,7 @@ def upload_design(path: Path, progress=lambda value: None) -> str:
     size = path.stat().st_size
     if not 0 < size <= SHARE_LIMIT:
         raise ValueError("Catbox accepts design packages up to 200 MB")
+    audit_public_upload(path)  # Mandatory even for callers outside ShareWorker.
     boundary = "sdd" + uuid.uuid4().hex
     head = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"reqtype\"\r\n\r\nfileupload\r\n"
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"fileToUpload\"; filename=\"design.sdd\"\r\n"
