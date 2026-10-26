@@ -11,7 +11,7 @@ namespace remains in use, preserving language preferences and saved codes.
 GitHub: `redsoul1905/SaveYourKDEDesign`. Update compatibility with the previous
 repository address is retained for existing installations.
 
-**Current version: 1.9.0** · [Changelog](#changelog)
+**Current version: 1.9.1** · [Changelog](#changelog)
 
 **New in 1.9.0:** portable saved look-and-feel layouts (including Oct26). Active
 wallpapers are bundled under content-derived neutral names; the generated layout
@@ -398,6 +398,20 @@ cd ~/SaveYourKDEDesign && ./install.sh --update
 - Optional: `paru`/`yay` for AUR packages, `flatpak`
 
 ## Changelog
+
+### v1.9.1
+
+- Restore stages file, symlink and directory replacements before touching the
+  existing destination. Copy/rename failures are reported, and temporary files
+  are cleaned up. Failed type changes put the original destination back.
+- Private restores replace the complete package-list set instead of mixing
+  lists from different backups. Backups without package lists clear stale lists;
+  public design imports and rollback archives leave package lists unchanged.
+- Failed rollback creation removes the incomplete archive while preserving the
+  previous rollback backup. Restore remains blocked if its safety backup fails.
+- Regression coverage for empty category selections, manifest traversal, copy
+  failures, type changes, rollback failure and package-list replacement.
+
 
 ### v1.7.9
 

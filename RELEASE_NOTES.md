@@ -1,4 +1,23 @@
-# SaveYourKDEDesign 1.9.0
+# SaveYourKDEDesign 1.9.1
+
+- Preserve existing files, directories and symlinks when preparing a restore
+  replacement fails. Report failures instead of claiming success, clean up
+  temporary copies, and recover the original destination on failed type changes.
+- Replace private-backup package lists as one complete set. Lists from older
+  archives no longer remain available for accidental installation. A private
+  backup without package lists clears stale lists. Public imports and rollback
+  archives preserve the current package-list set.
+- Remove incomplete rollback archives after a failure, retaining the previous
+  valid rollback. A failed safety backup continues to block the restore.
+- Retain the existing protections against manifest path traversal, empty
+  selection fallback and launcher paths containing spaces.
+
+Validation: 188 offline tests, including 14 new restore-safety regression tests;
+Python compilation and installer shell syntax checks. Tests use temporary home
+folders and injected I/O errors. No real package installation or desktop restart.
+
+## Previous release: 1.9.0
+
 
 - Replace the exact reviewed legacy cursor-follows-focus implementation in the
   export with a native KWin MoveMouseToFocus call. Correct the plugin ID and use

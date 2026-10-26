@@ -52,7 +52,7 @@ APP_NAME = "SaveYourKDEDesign"
 # Keep the old identity in source for v1.6's update validation and keep its
 # settings namespace, rollback paths and SDD1 codes compatible.
 LEGACY_APP_NAME = "SaveDesktopDesign"
-VERSION = "1.9.0"
+VERSION = "1.9.1"
 
 # Update über die GitHub-Releases — nur Standardbibliothek, kein Token.
 GITHUB_REPO = "redsoul1905/SaveYourKDEDesign"
@@ -850,21 +850,24 @@ def make_rollback(rel_paths: list[str], categories: list[str],
     }
     dest = rollback_path()
     tmp = dest.with_name(dest.name + ".new")
-    with tarfile.open(tmp, "w:gz") as tar:
-        # Public restores may deliberately write through a safe dotfile-manager
-        # link. Back up the data behind that link, not merely the link itself.
-        # Resolve only the restore roots. Nested links are replaced by _merge,
-        # not written through; following them could escape HOME or loop forever.
-        tar.dereference = False
-        for rel in present:
-            source = safe_public_restore_target(rel) if dereference else HOME / rel
-            tar.add(source, arcname=f"home/{rel}")
-        data = json.dumps(manifest, indent=2).encode()
-        info = tarfile.TarInfo("manifest.json")
-        info.size = len(data)
-        info.mtime = int(datetime.now().timestamp())
-        tar.addfile(info, io.BytesIO(data))
-    os.replace(tmp, dest)     # erst umbenennen, wenn das Archiv vollständig ist
+    try:
+        with tarfile.open(tmp, "w:gz") as tar:
+            # Public restores may deliberately write through a safe dotfile-manager
+            # link. Back up the data behind that link, not merely the link itself.
+            # Resolve only the restore roots. Nested links are replaced by _merge,
+            # not written through; following them could escape HOME or loop forever.
+            tar.dereference = False
+            for rel in present:
+                source = safe_public_restore_target(rel) if dereference else HOME / rel
+                tar.add(source, arcname=f"home/{rel}")
+            data = json.dumps(manifest, indent=2).encode()
+            info = tarfile.TarInfo("manifest.json")
+            info.size = len(data)
+            info.mtime = int(datetime.now().timestamp())
+            tar.addfile(info, io.BytesIO(data))
+        os.replace(tmp, dest)     # erst umbenennen, wenn das Archiv vollständig ist
+    finally:
+        tmp.unlink(missing_ok=True)
     return str(dest)
 
 
@@ -3881,23 +3884,36 @@ class RestoreWorker(QThread):
                         self._copy_into_home(entry, src_home)
                         self.progress.emit(30 + int(i / total * 60))
 
-                # Paketlisten ins Home legen, damit sie nach dem Restore greifbar sind
+                # A private backup owns the complete package-list set. Stage
+                # it before replacing the old set to avoid mixing archives.
+                # Design imports and rollback archives do not change this set.
                 has_packages = False
-                if pkg_dir.exists():
+                if pkg_dir.exists() or (not self.public and not manifest.get("rollback")):
                     dest = HOME / ".savedesktopdesign-packages"
                     if dest.is_symlink():
                         raise ValueError("Package directory must not be a symlink")
-                    dest.mkdir(exist_ok=True)
-                    for f in pkg_dir.iterdir():
-                        if f.name not in {"pacman-explicit.txt", "pacman-foreign.txt",
-                                          "pacman-repos.txt", "apt-manual.txt",
-                                          "dnf-packages.txt", "flatpak.txt"} or not f.is_file() or f.is_symlink():
-                            raise ValueError("Unexpected package list")
-                        if (dest / f.name).is_symlink():
-                            (dest / f.name).unlink()
-                        shutil.copy2(f, dest / f.name)
-                    has_packages = True
-                    self.log.emit(T("log_pkglists_saved") + str(dest))
+                    with tempfile.TemporaryDirectory(prefix=".syd-packages-", dir=HOME) as tmp_packages:
+                        staged = Path(tmp_packages) / "new"
+                        staged.mkdir()
+                        if pkg_dir.exists():
+                            for f in pkg_dir.iterdir():
+                                if f.name not in {"pacman-explicit.txt", "pacman-foreign.txt",
+                                                  "pacman-repos.txt", "apt-manual.txt",
+                                                  "dnf-packages.txt", "flatpak.txt"} or not f.is_file() or f.is_symlink():
+                                    raise ValueError("Unexpected package list")
+                                shutil.copy2(f, staged / f.name)
+                                has_packages = True
+                        old = Path(tmp_packages) / "old"
+                        if os.path.lexists(dest):
+                            os.replace(dest, old)
+                        try:
+                            os.replace(staged, dest)
+                        except Exception:
+                            if os.path.lexists(old):
+                                os.replace(old, dest)
+                            raise
+                    if has_packages:
+                        self.log.emit(T("log_pkglists_saved") + str(dest))
 
                 if src_home.exists():
                     self._post_restore()
@@ -3983,29 +3999,42 @@ class RestoreWorker(QThread):
             dst.unlink()
 
     def _merge(self, src: Path, dst: Path):
-        """Rekursives Kopieren, das vorhandene Dateien/Symlinks ersetzt.
-        Einzelne Fehler werden protokolliert, brechen aber nicht alles ab."""
+        """Stage replacements before touching existing data; propagate errors."""
         try:
-            if src.is_symlink():
-                link = os.readlink(src)
-                if os.path.lexists(dst):
-                    self._remove_existing(dst)
-                os.symlink(link, dst)
-            elif src.is_dir():
-                if os.path.lexists(dst) and not (dst.is_dir() and not dst.is_symlink()):
-                    self._remove_existing(dst)
+            if (src.is_dir() and not src.is_symlink()
+                    and (not os.path.lexists(dst) or (dst.is_dir() and not dst.is_symlink()))):
                 dst.mkdir(parents=True, exist_ok=True)
                 for child in src.iterdir():
                     self._merge(child, dst / child.name)
             else:
-                # Same-directory replace prevents a truncated configuration if
-                # the copy is interrupted. Existing safe symlinks were already
-                # resolved by _copy_into_home and therefore remain intact.
-                tmp = dst.with_name(dst.name + ".syd-new-" + uuid.uuid4().hex)
-                shutil.copy2(src, tmp)
-                os.replace(tmp, dst)
+                self._replace_entry(src, dst)
         except OSError as e:
             raise OSError(f"Could not restore {dst}: {e}") from e
+
+    def _replace_entry(self, src: Path, dst: Path):
+        # Stage on the same filesystem. Copy/link failures leave dst untouched,
+        # and temporary data is removed even when preparation or rename fails.
+        with tempfile.TemporaryDirectory(prefix=".syd-copy-", dir=dst.parent) as tmp:
+            staged = Path(tmp) / "new"
+            if src.is_symlink():
+                os.symlink(os.readlink(src), staged)
+            elif src.is_dir():
+                shutil.copytree(src, staged, symlinks=True)
+            else:
+                shutil.copy2(src, staged)
+            old = Path(tmp) / "old"
+            # rename cannot replace a directory with a file, or vice versa.
+            incompatible = (os.path.lexists(dst)
+                            and ((dst.is_dir() and not dst.is_symlink())
+                                 or (src.is_dir() and not src.is_symlink())))
+            if incompatible:
+                os.replace(dst, old)
+            try:
+                os.replace(staged, dst)
+            except Exception:
+                if incompatible:
+                    os.replace(old, dst)
+                raise
 
 
 # ----------------------------------------------------------------------------
